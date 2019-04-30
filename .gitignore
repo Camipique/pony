@@ -7,3 +7,6 @@ pony/orm/tests/htmlcov/*.*
 MANIFEST
 docs/_build/
 pony.egg-info/
+.venv/
+build/
+dist/

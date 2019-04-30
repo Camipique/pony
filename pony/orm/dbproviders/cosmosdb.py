@@ -21,6 +21,8 @@ from pony.orm.dbapiprovider import DBAPIProvider, Pool, wrap_dbapi_exceptions
 from pony.utils import datetime2timestamp, timestamp2datetime, absolutize_path, localbase, throw, reraise, \
     cut_traceback_depth
 
+from azure.cosmos import cosmos_client
+
 class SqliteExtensionUnavailable(Exception):
     pass
 
@@ -269,8 +271,8 @@ def keep_exception(func):
     return new_func
 
 
-class SQLiteProvider(DBAPIProvider):
-    dialect = 'SQLite'
+class CosmosDBProvider(DBAPIProvider):
+    dialect = 'CosmoDB'
     local_exceptions = local_exceptions
     max_name_len = 1024
 
@@ -305,6 +307,14 @@ class SQLiteProvider(DBAPIProvider):
         provider.pre_transaction_lock = Lock()
         provider.transaction_lock = Lock()
 
+    def execute(provider, cursor, sql, arguments=None, returning_id=False):
+        cursor.execute(sql, arguments)
+
+    @wrap_dbapi_exceptions
+    def commit(provider, connection, cache=None):
+        # FIXME: There is no commit in doc databases
+        pass
+
     @wrap_dbapi_exceptions
     def inspect_connection(provider, conn):
         DBAPIProvider.inspect_connection(provider, conn)
@@ -316,44 +326,17 @@ class SQLiteProvider(DBAPIProvider):
             finally: provider.local_exceptions.exc_info = None
 
     def acquire_lock(provider):
-        provider.pre_transaction_lock.acquire()
-        try:
-            provider.transaction_lock.acquire()
-        finally:
-            provider.pre_transaction_lock.release()
+        # FIXME: There is no lock in database
+        pass
 
     def release_lock(provider):
-        provider.transaction_lock.release()
+        # FIXME: There is no release lock in database
+        pass
 
     @wrap_dbapi_exceptions
     def set_transaction_mode(provider, connection, cache):
-        assert not cache.in_transaction
-        if cache.immediate:
-            provider.acquire_lock()
-        try:
-            cursor = connection.cursor()
-
-            db_session = cache.db_session
-            if db_session is not None and db_session.ddl:
-                cursor.execute('PRAGMA foreign_keys')
-                fk = cursor.fetchone()
-                if fk is not None: fk = fk[0]
-                if fk:
-                    sql = 'PRAGMA foreign_keys = false'
-                    if core.local.debug: log_orm(sql)
-                    cursor.execute(sql)
-                cache.saved_fk_state = bool(fk)
-                assert cache.immediate
-
-            if cache.immediate:
-                sql = 'BEGIN IMMEDIATE TRANSACTION'
-                if core.local.debug: log_orm(sql)
-                cursor.execute(sql)
-                cache.in_transaction = True
-            elif core.local.debug: log_orm('SWITCH TO AUTOCOMMIT MODE')
-        finally:
-            if cache.immediate and not cache.in_transaction:
-                provider.release_lock()
+        # FIXME: There is no transaction mode in database
+        pass
 
     def commit(provider, connection, cache=None):
         in_transaction = cache is not None and cache.in_transaction
@@ -397,23 +380,8 @@ class SQLiteProvider(DBAPIProvider):
                     raise
         DBAPIProvider.release(provider, connection, cache)
 
-    def get_pool(provider, filename, create_db=False, **kwargs):
-        if filename != ':memory:':
-            # When relative filename is specified, it is considered
-            # not relative to cwd, but to user module where
-            # Database instance is created
-
-            # the list of frames:
-            # 7 - user code: db = Database(...)
-            # 6 - cut_traceback decorator wrapper
-            # 5 - cut_traceback decorator
-            # 4 - pony.orm.Database.__init__() / .bind()
-            # 3 - pony.orm.Database._bind()
-            # 2 - pony.dbapiprovider.DBAPIProvider.__init__()
-            # 1 - SQLiteProvider.__init__()
-            # 0 - pony.dbproviders.sqlite.get_pool()
-            filename = absolutize_path(filename, frame_depth=cut_traceback_depth+5)
-        return SQLitePool(filename, create_db, **kwargs)
+    def get_pool(provider, endpoint, primary_key, **kwargs):
+        return CosmosDBPool(endpoint, primary_key, **kwargs)
 
     def table_exists(provider, connection, table_name, case_sensitive=True):
         return provider._exists(connection, table_name, None, case_sensitive)
@@ -422,38 +390,33 @@ class SQLiteProvider(DBAPIProvider):
         return provider._exists(connection, table_name, index_name, case_sensitive)
 
     def _exists(provider, connection, table_name, index_name=None, case_sensitive=True):
-        db_name, table_name = provider.split_table_name(table_name)
-
-        if db_name is None: catalog_name = 'sqlite_master'
-        else: catalog_name = (db_name, 'sqlite_master')
-        catalog_name = provider.quote_name(catalog_name)
-
-        cursor = connection.cursor()
-        if index_name is not None:
-            sql = "SELECT name FROM %s WHERE type='index' AND name=?" % catalog_name
-            if not case_sensitive: sql += ' COLLATE NOCASE'
-            cursor.execute(sql, [ index_name ])
-        else:
-            sql = "SELECT name FROM %s WHERE type='table' AND name=?" % catalog_name
-            if not case_sensitive: sql += ' COLLATE NOCASE'
-            cursor.execute(sql, [ table_name ])
-        row = cursor.fetchone()
-        return row[0] if row is not None else None
+        # TODO: Check if table/container exist and creates it
+        return None
+        # db_name, table_name = provider.split_table_name(table_name)
+        #
+        # if db_name is None: catalog_name = 'sqlite_master'
+        # else: catalog_name = (db_name, 'sqlite_master')
+        # catalog_name = provider.quote_name(catalog_name)
+        #
+        # cursor = connection.cursor()
+        # if index_name is not None:
+        #     sql = "SELECT name FROM %s WHERE type='index' AND name=?" % catalog_name
+        #     if not case_sensitive: sql += ' COLLATE NOCASE'
+        #     cursor.execute(sql, [ index_name ])
+        # else:
+        #     sql = "SELECT name FROM %s WHERE type='table' AND name=?" % catalog_name
+        #     if not case_sensitive: sql += ' COLLATE NOCASE'
+        #     cursor.execute(sql, [ table_name ])
+        # row = cursor.fetchone()
+        # return row[0] if row is not None else None
 
     def fk_exists(provider, connection, table_name, fk_name):
         assert False  # pragma: no cover
 
     def check_json1(provider, connection):
-        cursor = connection.cursor()
-        sql = '''
-            select json('{"this": "is", "a": ["test"]}')'''
-        try:
-            cursor.execute(sql)
-            return True
-        except sqlite.OperationalError:
-            return False
+        return True
 
-provider_cls = SQLiteProvider
+provider_cls = CosmosDBProvider
 
 def _text_factory(s):
     return s.decode('utf8', 'replace')
@@ -598,49 +561,85 @@ def py_array_slice(array, start, stop):
 def py_make_array(*items):
     return dumps(items)
 
-class SQLitePool(Pool):
-    def __init__(pool, filename, create_db, **kwargs): # called separately in each thread
-        pool.filename = filename
-        pool.create_db = create_db
+
+class CosmosDBCursor:
+
+    def __init__(cursor, client):
+        cursor.client = client
+        cursor.sql = None
+        cursor.arguments = None
+        cursor.query_results = []
+
+    def execute(cursor, sql, arguments):
+        cursor.sql = sql
+        cursor.arguments = arguments
+        print("Query: "+cursor.sql)
+        print("Params: "+str(cursor.arguments))
+        # TODO Execute sql queries
+        pass
+
+    def fetchone(cursor):
+        # TODO: return data from sql query
+        pass
+
+    def fetchmany(cursor, size=None):
+        # TODO: return data from sql query
+        pass
+
+    def fetchall(cursor):
+        # TODO: return data from sql query
+        return []
+
+
+class CosmosDBConnection:
+
+    def __init__(connection, endpoint, primary_key, **kwargs):
+        connection.endpoint = endpoint
+        connection.primary_key = primary_key
+        connection.kwargs = kwargs
+        connection.client = None
+
+    def create_client(connection):
+        connection.client = cosmos_client.CosmosClient(
+            url_connection=connection.endpoint,
+            auth={'masterKey': connection.primary_key}
+        )
+
+    def commit(self):
+        pass
+
+    def cursor(connection):
+        return CosmosDBCursor(connection.client)
+
+    def rollback(connection):
+        pass
+
+    def release_lock(connection):
+        pass
+
+class CosmosDBPool(Pool):
+    def __init__(pool, endpoint, primary_key, **kwargs):  # called separately in each thread
+        pool.endpoint = endpoint
+        pool.primary_key = primary_key
         pool.kwargs = kwargs
         pool.con = None
-    def _connect(pool):
-        filename = pool.filename
-        if filename != ':memory:' and not pool.create_db and not os.path.exists(filename):
-            throw(IOError, "Database file is not found: %r" % filename)
-        pool.con = con = sqlite.connect(filename, isolation_level=None, **pool.kwargs)
-        con.text_factory = _text_factory
 
-        def create_function(name, num_params, func):
-            func = keep_exception(func)
-            con.create_function(name, num_params, func)
-
-        create_function('power', 2, pow)
-        create_function('rand', 0, random)
-        create_function('py_upper', 1, py_upper)
-        create_function('py_lower', 1, py_lower)
-        create_function('py_json_unwrap', 1, py_json_unwrap)
-        create_function('py_json_extract', -1, py_json_extract)
-        create_function('py_json_contains', 3, py_json_contains)
-        create_function('py_json_nonzero', 2, py_json_nonzero)
-        create_function('py_json_array_length', -1, py_json_array_length)
-
-        create_function('py_array_index', 2, py_array_index)
-        create_function('py_array_contains', 2, py_array_contains)
-        create_function('py_array_subset', 2, py_array_subset)
-        create_function('py_array_length', 1, py_array_length)
-        create_function('py_array_slice', 3, py_array_slice)
-        create_function('py_make_array', -1, py_make_array)
-
-        if sqlite.sqlite_version_info >= (3, 6, 19):
-            con.execute('PRAGMA foreign_keys = true')
-
-        con.execute('PRAGMA case_sensitive_like = true')
-    def disconnect(pool):
-        if pool.filename != ':memory:':
-            Pool.disconnect(pool)
-    def drop(pool, con):
-        if pool.filename != ':memory:':
-            Pool.drop(pool, con)
+    def connect(pool):
+        if pool.con is None:
+            is_new_connection = True
+            pool.con = CosmosDBConnection(pool.endpoint, pool.primary_key)
+            pool.con.create_client()
         else:
-            con.rollback()
+            is_new_connection = False
+
+        return pool.con, is_new_connection
+
+
+    def release(pool, con):
+        pass
+
+    def disconnect(pool):
+        pass
+
+    def drop(pool, con):
+        pass

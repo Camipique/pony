@@ -8,7 +8,7 @@ from decimal import Decimal
 from pony.orm.core import *
 from pony.orm.tests.testutils import *
 
-db = Database('cosmosdb', 'https://eapy-cosmos.documents.azure.com:443/', 'NyvzGMMsZhzaQr2YY8Gy7laWBGW0VgZnNrm8w3KccYRcQSvTiTYGNyF4mgQxDQee7sFora6Rj12HZGQrbXlvuQ==')
+db = Database('cosmosdb', 'https://localhost:8081', 'C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw==', 'SchoolDatabase', 'School')
 
 class Student(db.Entity):
     name = Required(unicode)

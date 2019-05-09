@@ -22,6 +22,7 @@ from pony.utils import datetime2timestamp, timestamp2datetime, absolutize_path, 
     cut_traceback_depth
 
 from azure.cosmos import cosmos_client
+from azure.cosmos.errors import HTTPFailure
 
 class SqliteExtensionUnavailable(Exception):
     pass
@@ -66,6 +67,9 @@ class SQLiteBuilder(SQLBuilder):
     def SELECT_FOR_UPDATE(builder, nowait, skip_locked, *sections):
         assert not builder.indent
         return builder.SELECT(*sections)
+    def SELECT(builder, *sections):
+        # TODO
+        pass
     def INSERT(builder, table_name, columns, values, returning=None):
         if not values: return 'INSERT INTO %s DEFAULT VALUES' % builder.quote_name(table_name)
         return SQLBuilder.INSERT(builder, table_name, columns, values, returning)
@@ -380,8 +384,8 @@ class CosmosDBProvider(DBAPIProvider):
                     raise
         DBAPIProvider.release(provider, connection, cache)
 
-    def get_pool(provider, endpoint, primary_key, **kwargs):
-        return CosmosDBPool(endpoint, primary_key, **kwargs)
+    def get_pool(provider, endpoint, primary_key, database_name, container_name, **kwargs):
+        return CosmosDBPool(endpoint, primary_key, database_name, container_name, **kwargs)
 
     def table_exists(provider, connection, table_name, case_sensitive=True):
         return provider._exists(connection, table_name, None, case_sensitive)
@@ -562,6 +566,55 @@ def py_make_array(*items):
     return dumps(items)
 
 
+class CosmosClientDatabase:
+
+    def __init__(self, endpoint, primary_key, database_name, container_name):
+
+        self.client = cosmos_client.CosmosClient(
+            url_connection=endpoint,
+            auth={'masterKey': primary_key}
+        )
+
+        self.database_id = self.create_db_if_not_exists(database_name)
+        self.container_id = self.create_container_if_not_exists(container_name)
+
+    def create_db_if_not_exists(self, db_name):
+        db_link = 'dbs/'+db_name
+        try:
+            self.client.ReadDatabase(db_link)
+        except HTTPFailure:
+            self.client.CreateDatabase({'id': db_name})
+
+        return db_link
+
+    def create_container_if_not_exists(self, container_name):
+        container_link = self.database_id+'/colls/'+container_name
+        try:
+            self.client.ReadContainer(container_link)
+        except HTTPFailure:
+            self.client.CreateContainer(self.database_id, {'id': container_name})
+
+        return container_link
+
+    def delete_db(self):
+        try:
+            self.client.DeleteDatabase(self.database_id)
+        except HTTPFailure:
+            print("Something wrong in delete_db().")
+
+    def get_container(self):
+        try:
+            return self.client.ReadContainer(self.container_id)
+        except HTTPFailure:
+            return None
+
+    def get_container_id(self):
+        return self.container_id
+
+    def insert_doc(self, doc):
+        self.client.CreateItem(self.container_id, doc)
+
+
 class CosmosDBCursor:
 
     def __init__(cursor, client):
@@ -573,10 +626,25 @@ class CosmosDBCursor:
     def execute(cursor, sql, arguments):
         cursor.sql = sql
         cursor.arguments = arguments
-        print("Query: "+cursor.sql)
-        print("Params: "+str(cursor.arguments))
-        # TODO Execute sql queries
-        pass
+
+        if cursor.sql.startswith("INSERT INTO"):
+            cursor.insert(sql, arguments)
+
+    def insert(cursor, sql, arguments):
+        doc_values = re.findall('"([^"]*)"', sql)
+        doc = {
+            'doc_type': doc_values[0]
+        }
+
+        for i, value in enumerate(doc_values[1:], start=0):
+            if value == 'id':
+                arg = str(arguments[i])
+            else:
+                arg = arguments[i]
+
+            doc[value] = arg
+
+        cursor.client.insert_doc(doc)
 
     def fetchone(cursor):
         # TODO: return data from sql query
@@ -593,17 +661,20 @@ class CosmosDBCursor:
 
 class CosmosDBConnection:
 
-    def __init__(connection, endpoint, primary_key, **kwargs):
+    def __init__(connection, endpoint, primary_key, database_name, container, **kwargs):
         connection.endpoint = endpoint
         connection.primary_key = primary_key
+        connection.database_name = database_name
+        connection.container = container
         connection.kwargs = kwargs
         connection.client = None
 
     def create_client(connection):
-        connection.client = cosmos_client.CosmosClient(
-            url_connection=connection.endpoint,
-            auth={'masterKey': connection.primary_key}
-        )
+        # connection.client = cosmos_client.CosmosClient(
+        #     url_connection=connection.endpoint,
+        #     auth={'masterKey': connection.primary_key}
+        # )
+        connection.client = CosmosClientDatabase(connection.endpoint, connection.primary_key, connection.database_name, connection.container)
 
     def commit(self):
         pass
@@ -618,16 +689,18 @@ class CosmosDBConnection:
         pass
 
 class CosmosDBPool(Pool):
-    def __init__(pool, endpoint, primary_key, **kwargs):  # called separately in each thread
+    def __init__(pool, endpoint, primary_key, database_name, container_name, **kwargs):  # called separately in each thread
         pool.endpoint = endpoint
         pool.primary_key = primary_key
+        pool.database_name = database_name
+        pool.container_name = container_name
         pool.kwargs = kwargs
         pool.con = None
 
     def connect(pool):
         if pool.con is None:
             is_new_connection = True
-            pool.con = CosmosDBConnection(pool.endpoint, pool.primary_key)
+            pool.con = CosmosDBConnection(pool.endpoint, pool.primary_key, pool.database_name, pool.container_name)
             pool.con.create_client()
         else:
             is_new_connection = False

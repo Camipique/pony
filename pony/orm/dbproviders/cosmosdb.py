@@ -43,7 +43,7 @@ def make_overriden_string_func(sqlop):
         sql = monad.getsql()
         assert len(sql) == 1
         translator = monad.translator
-        return StringExprMonad(monad.type, [ sqlop, sql[0] ])
+        return StringExprMonad(monad.type, [sqlop, sql[0]])
     func.__name__ = sqlop
     return func
 
@@ -57,19 +57,38 @@ class SQLiteTranslator(SQLTranslator):
     StringMixin_UPPER = make_overriden_string_func('PY_UPPER')
     StringMixin_LOWER = make_overriden_string_func('PY_LOWER')
 
+
 class SQLiteBuilder(SQLBuilder):
     dialect = 'SQLite'
     least_func_name = 'min'
     greatest_func_name = 'max'
+
     def __init__(builder, provider, ast):
         builder.json1_available = provider.json1_available
         SQLBuilder.__init__(builder, provider, ast)
+
     def SELECT_FOR_UPDATE(builder, nowait, skip_locked, *sections):
         assert not builder.indent
         return builder.SELECT(*sections)
     def SELECT(builder, *sections):
-        # TODO
-        pass
+        query = ""
+        from_clause = 'FROM c'
+        select_clause = 'SELECT'
+        doc_type = ''
+
+        for section in sections:
+            if section[0] == 'FROM':
+                doc_type = section[1][2]
+                where_clause = 'WHERE c.doc_type="{}"'.format(doc_type)
+            elif section[0] == 'ALL':
+                for index in range(1, len(section)):
+                    select_clause += ' c["{}"] ?? null'.format(section[index][2])
+                    if index != len(section) - 1:
+                        select_clause += ','
+
+        query = select_clause + "\n" + from_clause + "\n" + where_clause
+        return query
+
     def INSERT(builder, table_name, columns, values, returning=None):
         if not values: return 'INSERT INTO %s DEFAULT VALUES' % builder.quote_name(table_name)
         return SQLBuilder.INSERT(builder, table_name, columns, values, returning)
@@ -395,7 +414,7 @@ class CosmosDBProvider(DBAPIProvider):
 
     def _exists(provider, connection, table_name, index_name=None, case_sensitive=True):
         # TODO: Check if table/container exist and creates it
-        return None
+        pass
         # db_name, table_name = provider.split_table_name(table_name)
         #
         # if db_name is None: catalog_name = 'sqlite_master'
@@ -420,10 +439,13 @@ class CosmosDBProvider(DBAPIProvider):
     def check_json1(provider, connection):
         return True
 
+
 provider_cls = CosmosDBProvider
+
 
 def _text_factory(s):
     return s.decode('utf8', 'replace')
+
 
 def make_string_function(name, base_func):
     def func(value):
@@ -440,8 +462,10 @@ def make_string_function(name, base_func):
     func.__name__ = name
     return func
 
+
 py_upper = make_string_function('py_upper', unicode.upper)
 py_lower = make_string_function('py_lower', unicode.lower)
+
 
 def py_json_unwrap(value):
     # [null,some-value] -> some-value
@@ -450,9 +474,11 @@ def py_json_unwrap(value):
     assert value.startswith('[null,'), value
     return value[6:-1]
 
+
 path_cache = {}
 
 json_path_re = re.compile(r'\[(-?\d+)\]|\.(?:(\w+)|"([^"]*)")', re.UNICODE)
+
 
 def _parse_path(path):
     if path in path_cache:
@@ -475,6 +501,7 @@ def _parse_path(path):
     path_cache[path] = keys
     return keys
 
+
 def _traverse(obj, keys):
     if keys is None: return None
     list_or_dict = (list, dict)
@@ -484,6 +511,7 @@ def _traverse(obj, keys):
         except (KeyError, IndexError): return None
     return obj
 
+
 def _extract(expr, *paths):
     expr = json.loads(expr) if isinstance(expr, basestring) else expr
     result = []
@@ -492,11 +520,13 @@ def _extract(expr, *paths):
         result.append(_traverse(expr, keys))
     return result[0] if len(paths) == 1 else result
 
+
 def py_json_extract(expr, *paths):
     result = _extract(expr, *paths)
     if type(result) in (list, dict):
         result = json.dumps(result, **SQLiteJsonConverter.json_kwargs)
     return result
+
 
 def py_json_query(expr, path, with_wrapper):
     result = _extract(expr, path)
@@ -505,9 +535,11 @@ def py_json_query(expr, path, with_wrapper):
         result = [result]
     return json.dumps(result, **SQLiteJsonConverter.json_kwargs)
 
+
 def py_json_value(expr, path):
     result = _extract(expr, path)
     return result if type(result) not in (list, dict) else None
+
 
 def py_json_contains(expr, path, key):
     expr = json.loads(expr) if isinstance(expr, basestring) else expr
@@ -515,11 +547,13 @@ def py_json_contains(expr, path, key):
     expr = _traverse(expr, keys)
     return type(expr) in (list, dict) and key in expr
 
+
 def py_json_nonzero(expr, path):
     expr = json.loads(expr) if isinstance(expr, basestring) else expr
     keys = _parse_path(path)
     expr = _traverse(expr, keys)
     return bool(expr)
+
 
 def py_json_array_length(expr, path=None):
     expr = json.loads(expr) if isinstance(expr, basestring) else expr
@@ -527,6 +561,7 @@ def py_json_array_length(expr, path=None):
         keys = _parse_path(path)
         expr = _traverse(expr, keys)
     return len(expr) if type(expr) is list else 0
+
 
 def wrap_array_func(func):
     @wraps(func)
@@ -537,6 +572,7 @@ def wrap_array_func(func):
         return func(array, *args)
     return new_func
 
+
 @wrap_array_func
 def py_array_index(array, index):
     try:
@@ -544,9 +580,11 @@ def py_array_index(array, index):
     except IndexError:
         return None
 
+
 @wrap_array_func
 def py_array_contains(array, item):
     return item in array
+
 
 @wrap_array_func
 def py_array_subset(array, items):
@@ -554,20 +592,22 @@ def py_array_subset(array, items):
     items = json.loads(items)
     return set(items).issubset(set(array))
 
+
 @wrap_array_func
 def py_array_length(array):
     return len(array)
 
+
 @wrap_array_func
 def py_array_slice(array, start, stop):
     return dumps(array[start:stop])
+
 
 def py_make_array(*items):
     return dumps(items)
 
 
 class CosmosClientDatabase:
-
     def __init__(self, endpoint, primary_key, database_name, container_name):
 
         self.client = cosmos_client.CosmosClient(
@@ -616,7 +656,6 @@ class CosmosClientDatabase:
 
 
 class CosmosDBCursor:
-
     def __init__(cursor, client):
         cursor.client = client
         cursor.sql = None
@@ -655,12 +694,11 @@ class CosmosDBCursor:
         pass
 
     def fetchall(cursor):
-        # TODO: return data from sql query
-        return []
+        result = cursor.client.client.QueryItems(cursor.client.get_container_id(), cursor.sql)
+        return [tuple(item.values()) for item in result]
 
 
 class CosmosDBConnection:
-
     def __init__(connection, endpoint, primary_key, database_name, container, **kwargs):
         connection.endpoint = endpoint
         connection.primary_key = primary_key
@@ -670,10 +708,6 @@ class CosmosDBConnection:
         connection.client = None
 
     def create_client(connection):
-        # connection.client = cosmos_client.CosmosClient(
-        #     url_connection=connection.endpoint,
-        #     auth={'masterKey': connection.primary_key}
-        # )
         connection.client = CosmosClientDatabase(connection.endpoint, connection.primary_key, connection.database_name, connection.container)
 
     def commit(self):
@@ -687,6 +721,7 @@ class CosmosDBConnection:
 
     def release_lock(connection):
         pass
+
 
 class CosmosDBPool(Pool):
     def __init__(pool, endpoint, primary_key, database_name, container_name, **kwargs):  # called separately in each thread
@@ -706,7 +741,6 @@ class CosmosDBPool(Pool):
             is_new_connection = False
 
         return pool.con, is_new_connection
-
 
     def release(pool, con):
         pass

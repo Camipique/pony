@@ -16,7 +16,7 @@ from pony.orm import core, dbschema, dbapiprovider
 from pony.orm.core import log_orm
 from pony.orm.ormtypes import Json, TrackedArray
 from pony.orm.sqltranslation import SQLTranslator, StringExprMonad
-from pony.orm.sqlbuilding import SQLBuilder, join, make_unary_func
+from pony.orm.sqlbuilding import SQLBuilder, join, make_unary_func, Param
 from pony.orm.dbapiprovider import DBAPIProvider, Pool, wrap_dbapi_exceptions
 from pony.utils import datetime2timestamp, timestamp2datetime, absolutize_path, localbase, throw, reraise, \
     cut_traceback_depth
@@ -70,24 +70,57 @@ class SQLiteBuilder(SQLBuilder):
     def SELECT_FOR_UPDATE(builder, nowait, skip_locked, *sections):
         assert not builder.indent
         return builder.SELECT(*sections)
+
     def SELECT(builder, *sections):
-        query = ""
-        from_clause = 'FROM c'
-        select_clause = 'SELECT'
-        doc_type = ''
+
+        from_clause = ['FROM ', 'c ']
+        select_clause = ['SELECT']
+        where_clause = ['WHERE']
 
         for section in sections:
             if section[0] == 'FROM':
-                doc_type = section[1][2]
-                where_clause = 'WHERE c.doc_type="{}"'.format(doc_type)
+                doc_type = '"' + section[1][2] + '"'
+                where_clause += [' c.doc_type', '=', doc_type]
             elif section[0] == 'ALL':
                 for index in range(1, len(section)):
-                    select_clause += ' c["{}"] ?? null'.format(section[index][2])
+                    select_clause += [' c["{}"] ?? null'.format(section[index][2])]
                     if index != len(section) - 1:
-                        select_clause += ','
+                        select_clause += [',']
+                    else:
+                        select_clause += [' ']
+            # elif section[0] == 'AGGREGATES':
+            #     for index in range(1, len(section)):
+            #         select_clause += ' {}(c["{}"]) ?? null'.format(section[index][0], section[index][2][2])
+            #         if index != len(section) - 1:
+            #             select_clause += ','
+            elif section[0] == "WHERE":
+                for index in range(1, len(section)):
+                    operator = section[index][0]
+                    fact1 = section[index][1]
+                    fact2 = section[index][2]
+                    if (fact1[0] != 'VALUE') or (fact2[0] != 'VALUE'):  # because of the 1 = 0 clause, check later
+                        where_clause += [' AND', ' c.{}'.format(section[index][1][2]), builder.translate_operator(operator)]
 
-        query = select_clause + "\n" + from_clause + "\n" + where_clause
+                        if section[index][2][0] == 'PARAM':
+                            p = Param(builder.paramstyle, section[index][2][1], section[index][2][2])
+                            where_clause += [p]
+                        elif section[index][2][0] == 'VALUE':
+                            where_clause += [section[index][2][1]]
+
+        query = select_clause + from_clause + where_clause
         return query
+
+    def translate_operator(builder, operator):
+        operator_dict = {
+            'EQ': "=",
+            'NE': "<>",
+            'LT': "<",
+            'LE': "<=",
+            'GT': ">",
+            'GE': ">="
+        }
+
+        return operator_dict.get(operator, None)
 
     def INSERT(builder, table_name, columns, values, returning=None):
         if not values: return 'INSERT INTO %s DEFAULT VALUES' % builder.quote_name(table_name)
@@ -296,6 +329,7 @@ def keep_exception(func):
 
 class CosmosDBProvider(DBAPIProvider):
     dialect = 'CosmoDB'
+    paramstyle = 'cosmosformat'
     local_exceptions = local_exceptions
     max_name_len = 1024
 
@@ -686,12 +720,28 @@ class CosmosDBCursor:
         cursor.client.insert_doc(doc)
 
     def fetchone(cursor):
-        # TODO: return data from sql query
-        pass
+        # Aggregation functions
+        result = cursor.client.client.QueryItems(cursor.client.get_container_id(), cursor.sql, cursor.arguments)
+        return [tuple(item.values()) for item in result]
 
     def fetchmany(cursor, size=None):
-        # TODO: return data from sql query
-        pass
+
+        parameters = []
+
+        for i in range(len(cursor.arguments)):
+            param_dict = {
+                'name': "@p{}".format(i+1),
+                'value': cursor.arguments[i]
+            }
+            parameters.append(param_dict)
+
+        query = {
+            'query': cursor.sql,
+            'parameters': parameters
+        }
+
+        result = cursor.client.client.QueryItems(cursor.client.get_container_id(), query)
+        return [tuple(item.values()) for item in result]
 
     def fetchall(cursor):
         result = cursor.client.client.QueryItems(cursor.client.get_container_id(), cursor.sql)

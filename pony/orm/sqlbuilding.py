@@ -12,14 +12,17 @@ from pony.orm.ormtypes import RawSQL, Json
 
 class AstError(Exception): pass
 
+
 class Param(object):
     __slots__ = 'style', 'id', 'paramkey', 'converter', 'optimistic'
+
     def __init__(param, paramstyle, paramkey, converter=None, optimistic=False):
         param.style = paramstyle
         param.id = None
         param.paramkey = paramkey
         param.converter = converter
         param.optimistic = optimistic
+
     def eval(param, values):
         varkey, i, j = param.paramkey
         value = values[varkey]
@@ -38,6 +41,7 @@ class Param(object):
                 value = converter.val2dbval(value)
             value = converter.py2sql(value)
         return value
+
     def __unicode__(param):
         paramstyle = param.style
         if paramstyle == 'qmark': return u'?'
@@ -45,27 +49,35 @@ class Param(object):
         elif paramstyle == 'numeric': return u':%d' % param.id
         elif paramstyle == 'named': return u':p%d' % param.id
         elif paramstyle == 'pyformat': return u'%%(p%d)s' % param.id
+        elif paramstyle == 'cosmosformat': return u'@p%d' % param.id
         else: throw(NotImplementedError)
-    if not PY2: __str__ = __unicode__
+    if not PY2:
+        __str__ = __unicode__
+
     def __repr__(param):
         return '%s(%r)' % (param.__class__.__name__, param.paramkey)
 
+
 class CompositeParam(Param):
     __slots__ = 'items', 'func'
+
     def __init__(param, paramstyle, paramkey, items, func):
         for item in items: assert isinstance(item, (Param, Value)), item
         Param.__init__(param, paramstyle, paramkey)
         param.items = items
         param.func = func
+
     def eval(param, values):
         args = [ item.eval(values) if isinstance(item, Param) else item.value for item in param.items ]
         return param.func(args)
 
 class Value(object):
     __slots__ = 'paramstyle', 'value'
+
     def __init__(self, paramstyle, value):
         self.paramstyle = paramstyle
         self.value = value
+
     def __unicode__(self):
         value = self.value
         if value is None: return 'null'
@@ -131,8 +143,10 @@ def move_conditions_from_inner_join_to_where(sections):
                 new_where_list = [ 'WHERE' ]
                 new_sections.insert(i+1, new_where_list)
             break
-    else: return sections
-    for join in new_from_list[2:]:
+    else:
+        return sections
+
+    for join in new_from_list[2:]:  # Here check JOINS
         if join[1] in ('TABLE', 'SELECT') and len(join) == 4:
             new_where_list.append(join.pop())
     return new_sections
@@ -165,6 +179,7 @@ class SQLBuilder(object):
     indent_spaces = " " * 4
     least_func_name = 'least'
     greatest_func_name = 'greatest'
+
     def __init__(builder, provider, ast):
         builder.provider = provider
         builder.quote_name = provider.quote_name
@@ -185,7 +200,7 @@ class SQLBuilder(object):
         if paramstyle in ('qmark', 'format'):
             def adapter(values):
                 return tuple(param.eval(values) for param in params)
-        elif paramstyle == 'numeric':
+        elif paramstyle in ('numeric', 'cosmosformat'):
             def adapter(values):
                 return tuple(param.eval(values) for param in params)
         elif paramstyle in ('named', 'pyformat'):
@@ -214,16 +229,20 @@ class SQLBuilder(object):
 ##            else:
 ##                del traceback
 ##                raise
+
     def INSERT(builder, table_name, columns, values, returning=None):
-        return [ 'INSERT INTO ', builder.quote_name(table_name), ' (',
+        return ['INSERT INTO ', builder.quote_name(table_name), ' (',
                  join(', ', [builder.quote_name(column) for column in columns ]),
-                 ') VALUES (', join(', ', [builder(value) for value in values]), ')' ]
+                 ') VALUES (', join(', ', [builder(value) for value in values]), ')']
+
     def DEFAULT(builder):
         return 'DEFAULT'
+
     def UPDATE(builder, table_name, pairs, where=None):
         return [ 'UPDATE ', builder.quote_name(table_name), '\nSET ',
                  join(', ', [ (builder.quote_name(name), ' = ', builder(param)) for name, param in pairs]),
-                 where and [ '\n', builder(where) ] or [] ]
+                 where and ['\n', builder(where) ] or []]
+
     def DELETE(builder, alias, from_ast, where=None):
         builder.indent += 1
         if alias is not None:
@@ -236,13 +255,15 @@ class SQLBuilder(object):
             if alias is not None: builder.suppress_aliases = True
             if not where: return 'DELETE ', builder(from_ast)
             return 'DELETE ', builder(from_ast), builder(where)
+
     def _subquery(builder, *sections):
         builder.indent += 1
         if not builder.inner_join_syntax:
             sections = move_conditions_from_inner_join_to_where(sections)
-        result = [ builder(s) for s in sections ]
+        result = [builder(s) for s in sections]
         builder.indent -= 1
         return result
+
     def SELECT(builder, *sections):
         prev_suppress_aliases = builder.suppress_aliases
         builder.suppress_aliases = False
@@ -254,34 +275,43 @@ class SQLBuilder(object):
             return result
         finally:
             builder.suppress_aliases = prev_suppress_aliases
+
     def SELECT_FOR_UPDATE(builder, nowait, skip_locked, *sections):
         assert not builder.indent
         result = builder.SELECT(*sections)
         nowait = ' NOWAIT' if nowait else ''
         skip_locked = ' SKIP LOCKED' if skip_locked else ''
         return result, 'FOR UPDATE', nowait, skip_locked, '\n'
+
     def EXISTS(builder, *sections):
         result = builder._subquery(*sections)
         indent = builder.indent_spaces * builder.indent
         return 'EXISTS (\n', indent, 'SELECT 1\n', result, indent, ')'
+
     def NOT_EXISTS(builder, *sections):
         return 'NOT ', builder.EXISTS(*sections)
+
     @indentable
     def ALL(builder, *expr_list):
-        exprs = [ builder(e) for e in expr_list ]
+        exprs = [builder(e) for e in expr_list]
         return 'SELECT ', join(', ', exprs), '\n'
+
     @indentable
     def DISTINCT(builder, *expr_list):
         exprs = [ builder(e) for e in expr_list ]
         return 'SELECT DISTINCT ', join(', ', exprs), '\n'
+
     @indentable
     def AGGREGATES(builder, *expr_list):
-        exprs = [ builder(e) for e in expr_list ]
+        exprs = [builder(e) for e in expr_list]
         return 'SELECT ', join(', ', exprs), '\n'
+
     def AS(builder, expr, alias):
         return builder(expr), ' AS ', builder.quote_name(alias)
+
     def compound_name(builder, name_parts):
         return '.'.join(p and builder.quote_name(p) or '' for p in name_parts)
+
     def sql_join(builder, join_type, sources):
         indent = builder.indent_spaces * (builder.indent-1)
         indent2 = indent + builder.indent_spaces
@@ -295,29 +325,39 @@ class SQLBuilder(object):
                 alias, kind, x, join_cond = source
             else: throw(AstError, 'Invalid source in FROM section: %r' % source)
             if i > 0:
-                if join_cond is None: result.append(', ')
-                else: result += [ '\n', indent, '  %s JOIN ' % join_type ]
+                if join_cond is None:
+                    result.append(', ')
+                else:
+                    result += ['\n', indent, '  %s JOIN ' % join_type]
             if builder.suppress_aliases: alias = None
             elif alias is not None: alias = builder.quote_name(alias)
             if kind == 'TABLE':
-                if isinstance(x, basestring): result.append(builder.quote_name(x))
-                else: result.append(builder.compound_name(x))
-                if alias is not None: result += ' ', alias  # Oracle does not support 'AS' here
+                if isinstance(x, basestring):
+                    result.append(builder.quote_name(x))
+                else:
+                    result.append(builder.compound_name(x))
+                if alias is not None:
+                    result += ' ', alias  # Oracle does not support 'AS' here
             elif kind == 'SELECT':
-                if alias is None: throw(AstError, 'Subquery in FROM section must have an alias')
+                if alias is None:
+                    throw(AstError, 'Subquery in FROM section must have an alias')
                 result += builder.SELECT(*x), ' ', alias  # Oracle does not support 'AS' here
             else: throw(AstError, 'Invalid source kind in FROM section: %r' % kind)
-            if join_cond is not None: result += [ '\n', indent2, 'ON ', builder(join_cond) ]
+            if join_cond is not None: result += ['\n', indent2, 'ON ', builder(join_cond)]
         result.append('\n')
         return result
+
     def FROM(builder, *sources):
         return builder.sql_join('INNER', sources)
+
     def INNER_JOIN(builder, *sources):
         builder.inner_join_syntax = True
         return builder.sql_join('INNER', sources)
+
     @indentable
     def LEFT_JOIN(builder, *sources):
         return builder.sql_join('LEFT', sources)
+
     def WHERE(builder, *conditions):
         if not conditions: return ''
         conditions = flat_conditions(conditions)
@@ -328,6 +368,7 @@ class SQLBuilder(object):
         for condition in conditions[1:]:
             extend((indent, '  AND ', builder(condition), '\n'))
         return result
+
     def HAVING(builder, *conditions):
         if not conditions: return ''
         conditions = flat_conditions(conditions)
@@ -338,19 +379,24 @@ class SQLBuilder(object):
         for condition in conditions[1:]:
             extend((indent, '  AND ', builder(condition), '\n'))
         return result
+
     @indentable
     def GROUP_BY(builder, *expr_list):
         exprs = [ builder(e) for e in expr_list ]
         return 'GROUP BY ', join(', ', exprs), '\n'
+
     @indentable
     def UNION(builder, kind, *sections):
         return 'UNION ', kind, '\n', builder.SELECT(*sections)
+
     @indentable
     def INTERSECT(builder, *sections):
         return 'INTERSECT\n', builder.SELECT(*sections)
+
     @indentable
     def EXCEPT(builder, *sections):
         return 'EXCEPT\n', builder.SELECT(*sections)
+
     @indentable
     def ORDER_BY(builder, *order_list):
         result = [ 'ORDER BY ' ]

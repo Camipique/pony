@@ -78,10 +78,12 @@ class SQLiteBuilder(SQLBuilder):
         where_clause = ['WHERE']
 
         for section in sections:
-            if section[0] == 'FROM':
+            clause = section[0]
+
+            if clause == 'FROM':
                 doc_type = '"' + section[1][2] + '"'
-                where_clause += [' c.doc_type', '=', doc_type]
-            elif section[0] == 'ALL':
+                where_clause += [' c["doc_type"]', '=', doc_type]
+            elif clause == 'ALL':
                 for index in range(1, len(section)):
                     select_clause += [' c["{}"] ?? null'.format(section[index][2])]
                     if index != len(section) - 1:
@@ -93,13 +95,13 @@ class SQLiteBuilder(SQLBuilder):
             #         select_clause += ' {}(c["{}"]) ?? null'.format(section[index][0], section[index][2][2])
             #         if index != len(section) - 1:
             #             select_clause += ','
-            elif section[0] == "WHERE":
+            elif clause == "WHERE":
                 for index in range(1, len(section)):
                     operator = section[index][0]
                     fact1 = section[index][1]
                     fact2 = section[index][2]
                     if (fact1[0] != 'VALUE') or (fact2[0] != 'VALUE'):  # because of the 1 = 0 clause, check later
-                        where_clause += [' AND', ' c.{}'.format(section[index][1][2]), builder.translate_operator(operator)]
+                        where_clause += [' AND', ' c["{}"]'.format(section[index][1][2]), builder.translate_operator(operator)]
 
                         if section[index][2][0] == 'PARAM':
                             p = Param(builder.paramstyle, section[index][2][1], section[index][2][2])
@@ -688,6 +690,26 @@ class CosmosClientDatabase:
     def insert_doc(self, doc):
         self.client.CreateItem(self.container_id, doc)
 
+    def generate_query(self, sql, args):
+        parameters = []
+
+        for i in range(len(args)):
+            param_dict = {
+                'name': "@p{}".format(i + 1),
+                'value': args[i]
+            }
+            parameters.append(param_dict)
+
+        query = {
+            'query': sql,
+            'parameters': parameters
+        }
+
+        return query
+
+    def get_items(self, sql, args):
+        return self.client.QueryItems(self.container_id, self.generate_query(sql, args))
+
 
 class CosmosDBCursor:
     def __init__(cursor, client):
@@ -699,6 +721,9 @@ class CosmosDBCursor:
     def execute(cursor, sql, arguments):
         cursor.sql = sql
         cursor.arguments = arguments
+
+        print(cursor.sql)
+        print(cursor.arguments)
 
         if cursor.sql.startswith("INSERT INTO"):
             cursor.insert(sql, arguments)
@@ -720,31 +745,15 @@ class CosmosDBCursor:
         cursor.client.insert_doc(doc)
 
     def fetchone(cursor):
-        # Aggregation functions
-        result = cursor.client.client.QueryItems(cursor.client.get_container_id(), cursor.sql, cursor.arguments)
+        result = cursor.client.get_items(cursor.sql, cursor.arguments)
         return [tuple(item.values()) for item in result]
 
     def fetchmany(cursor, size=None):
-
-        parameters = []
-
-        for i in range(len(cursor.arguments)):
-            param_dict = {
-                'name': "@p{}".format(i+1),
-                'value': cursor.arguments[i]
-            }
-            parameters.append(param_dict)
-
-        query = {
-            'query': cursor.sql,
-            'parameters': parameters
-        }
-
-        result = cursor.client.client.QueryItems(cursor.client.get_container_id(), query)
+        result = cursor.client.get_items(cursor.sql, cursor.arguments)
         return [tuple(item.values()) for item in result]
 
     def fetchall(cursor):
-        result = cursor.client.client.QueryItems(cursor.client.get_container_id(), cursor.sql)
+        result = cursor.client.get_items(cursor.sql, cursor.arguments)
         return [tuple(item.values()) for item in result]
 
 

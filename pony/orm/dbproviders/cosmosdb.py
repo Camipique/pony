@@ -125,8 +125,24 @@ class SQLiteBuilder(SQLBuilder):
         return operator_dict.get(operator, None)
 
     def INSERT(builder, table_name, columns, values, returning=None):
-        if not values: return 'INSERT INTO %s DEFAULT VALUES' % builder.quote_name(table_name)
-        return SQLBuilder.INSERT(builder, table_name, columns, values, returning)
+        insert = ['I ', '{']
+
+        insert += ['"doc_type":', '"' + table_name + '"']
+
+        for i, att in enumerate(columns):
+            insert += [', ', '"{}":'.format(att)]
+
+            if values[i][2].py_type in (str, date) or att == 'id':
+                insert += ['"', Param(builder.paramstyle, (i, None, None), values[i][2]), '"']
+            else:
+                insert += [Param(builder.paramstyle, (i, None, None), values[i][2])]
+
+        insert += ['}']
+
+        return insert
+
+        # if not values: return 'INSERT INTO %s DEFAULT VALUES' % builder.quote_name(table_name)
+        # return SQLBuilder.INSERT(builder, table_name, columns, values, returning)
     def TODAY(builder):
         return "date('now', 'localtime')"
     def NOW(builder):
@@ -725,24 +741,14 @@ class CosmosDBCursor:
         print(cursor.sql)
         print(cursor.arguments)
 
-        if cursor.sql.startswith("INSERT INTO"):
+        if cursor.sql.startswith('I'):
             cursor.insert(sql, arguments)
 
     def insert(cursor, sql, arguments):
-        doc_values = re.findall('"([^"]*)"', sql)
-        doc = {
-            'doc_type': doc_values[0]
-        }
+        for i, p in enumerate(arguments, start=1):
+            sql = sql.replace('@p{}'.format(i), str(p))
 
-        for i, value in enumerate(doc_values[1:], start=0):
-            if value == 'id':
-                arg = str(arguments[i])
-            else:
-                arg = arguments[i]
-
-            doc[value] = arg
-
-        cursor.client.insert_doc(doc)
+        cursor.client.insert_doc(json.loads(sql.split('I ')[1]))
 
     def fetchone(cursor):
         result = cursor.client.get_items(cursor.sql, cursor.arguments)

@@ -101,13 +101,29 @@ class SQLiteBuilder(SQLBuilder):
                     fact1 = section[index][1]
                     fact2 = section[index][2]
                     if (fact1[0] != 'VALUE') or (fact2[0] != 'VALUE'):  # because of the 1 = 0 clause, check later
-                        where_clause += [' AND', ' c["{}"]'.format(section[index][1][2]), builder.translate_operator(operator)]
 
-                        if section[index][2][0] == 'PARAM':
-                            p = Param(builder.paramstyle, section[index][2][1], section[index][2][2])
+                        cond = ' c["{}"]'
+
+                        if fact1[0] == 'JSON_VALUE':
+                            cond = cond.format(section[index][1][1][2])
+                            for v in section[index][1][2]:
+                                cond += '["{}"]'.format(v[1])
+                        else:  # if is COLUMN
+                            cond = cond.format(section[index][1][2])
+
+                        where_clause += [' AND', cond, builder.translate_operator(operator)]
+
+                        value_type = section[index][2][0]
+                        value = section[index][2][1]
+
+                        if value_type == 'PARAM':
+                            p = Param(builder.paramstyle, value, section[index][2][2])
                             where_clause += [p]
-                        elif section[index][2][0] == 'VALUE':
-                            where_clause += [section[index][2][1]]
+                        elif value_type == 'VALUE':
+                            if isinstance(value, str):
+                                where_clause += ['"', value, '"']
+                            else:
+                                where_clause += [value]
 
         query = select_clause + from_clause + where_clause
         return query

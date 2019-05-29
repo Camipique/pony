@@ -42,7 +42,7 @@ class TestQuery(unittest.TestCase):
     def test1(self):
         with db_session:
             g1 = Group(number=1, name="group1", extra={"chave1": "valor1", "chave2": 2})
-            g2 = Group(number=2, name="group2")
+            g2 = Group(number=2, name="group2", extra={"chave1": "valor2", "chave2": { "chave3": 3}})
             s1 = Student(id=1, name='S1', group=g1, gpa=3.1)
             s2 = Student(id=2, name='S2', group=g1, gpa=3.2, scholarship=100, dob=date(2000, 1, 1))
             s3 = Student(id=3, name='S3', group=g1, gpa=3.3, scholarship=200, dob=date(2001, 1, 2))
@@ -70,12 +70,21 @@ class TestQuery(unittest.TestCase):
             # Simple select with conditions
             result = Group.select(lambda g: g.number == 1)[:]
             self.assertIsNotNone(result)
+            self.assertNotEqual(len(result), 0)
 
             for g in result:
                 self.assertEqual(g.number, 1)
 
+            result = Group.select(lambda g: g.name == "group1")[:]
+            self.assertIsNotNone(result)
+            self.assertNotEqual(len(result), 0)
+
+            for g in result:
+                self.assertIsNotNone(g.name, "group1")
+
             result = Student.select(lambda s: s.gpa > Decimal('3.1'))[:]
             self.assertIsNotNone(result)
+            self.assertNotEqual(len(result), 0)
 
             for s in result:
                 self.assertGreater(s.gpa, 3.1)
@@ -103,6 +112,24 @@ class TestQuery(unittest.TestCase):
 
             # Try to get a non existent group, using primary key
             self.assertRaises(pony.orm.core.ObjectNotFound, get_group_by_pk, 3)
+
+            result = Group.select(lambda g: g.extra['chave2']['chave3'] == 3)[:]
+            self.assertIsNotNone(result)
+            self.assertNotEqual(len(result), 0)
+
+            for g in result:
+                self.assertEqual(g.extra['chave2']['chave3'], 3)
+
+            result = Group.select(lambda g: g.extra['chave1'] == 'valor1')[:]
+            self.assertIsNotNone(result)
+            self.assertNotEqual(len(result), 0)
+
+            for g in result:
+                self.assertEqual(g.extra['chave1'], 'valor1')
+
+            result = Group.select(lambda g: g.extra['chave2']['not_defined'] == 'not_defined')[:]
+            self.assertIsNotNone(result)
+            self.assertEqual(len(result), 0)
 
             # Queries with relation between objects
             # result = Student.select(lambda s: s.group.number == g1.number)

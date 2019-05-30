@@ -120,7 +120,7 @@ class SQLiteBuilder(SQLBuilder):
                             p = Param(builder.paramstyle, value, section[index][2][2])
                             where_clause += [p]
                         elif value_type == 'VALUE':
-                            if isinstance(value, str):
+                            if isinstance(value, str) or isinstance(value, datetime):
                                 where_clause += ['"', value, '"']
                             else:
                                 where_clause += [value]
@@ -148,7 +148,7 @@ class SQLiteBuilder(SQLBuilder):
         for i, att in enumerate(columns):
             insert += [', ', '"{}":'.format(att)]
 
-            if values[i][2].py_type in (str, date) or att == 'id':
+            if values[i][2].py_type in (str, datetime) or att == 'id':
                 insert += ['"', Param(builder.paramstyle, (i, None, None), values[i][2]), '"']
             else:
                 insert += [Param(builder.paramstyle, (i, None, None), values[i][2])]
@@ -156,9 +156,6 @@ class SQLiteBuilder(SQLBuilder):
         insert += ['}']
 
         return insert
-
-        # if not values: return 'INSERT INTO %s DEFAULT VALUES' % builder.quote_name(table_name)
-        # return SQLBuilder.INSERT(builder, table_name, columns, values, returning)
     def TODAY(builder):
         return "date('now', 'localtime')"
     def NOW(builder):

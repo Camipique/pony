@@ -1,7 +1,7 @@
 from __future__ import absolute_import, print_function, division
 
 import unittest
-from datetime import date
+from datetime import datetime
 from decimal import Decimal
 
 from pony.orm.core import *
@@ -16,7 +16,7 @@ class Student(db.Entity):
     scholarship = Optional(int)
     gpa = Optional(Decimal, 3, 1)
     group = Required('Group')
-    dob = Optional(date)
+    dob = Optional(datetime)
     extra = Optional(Json)
 
 
@@ -41,11 +41,13 @@ class TestQuery(unittest.TestCase):
 
     def test1(self):
         with db_session:
+            s3_dob = datetime(2001, 1, 2)
+
             g1 = Group(number=1, name="group1", extra={"chave1": "valor1", "chave2": 2})
             g2 = Group(number=2, name="group2", extra={"chave1": "valor2", "chave2": { "chave3": 3}})
             s1 = Student(id=1, name='S1', group=g1, gpa=3.1)
-            s2 = Student(id=2, name='S2', group=g1, gpa=3.2, scholarship=100, dob=date(2000, 1, 1))
-            s3 = Student(id=3, name='S3', group=g1, gpa=3.3, scholarship=200, dob=date(2001, 1, 2))
+            s2 = Student(id=2, name='S2', group=g1, gpa=3.2, scholarship=100, dob=datetime(2010, 1, 1))
+            s3 = Student(id=3, name='S3', group=g1, gpa=3.3, scholarship=200, dob=s3_dob)
 
             # Select all groups
             result = Group.select()[:]
@@ -130,6 +132,12 @@ class TestQuery(unittest.TestCase):
             result = Group.select(lambda g: g.extra['chave2']['not_defined'] == 'not_defined')[:]
             self.assertIsNotNone(result)
             self.assertEqual(len(result), 0)
+
+            result = Student.select(lambda s: s.dob > datetime(1990, 1, 1) and s.dob < datetime(2002, 1, 1))[:]
+            self.assertIsNotNone(result)
+            self.assertNotEqual(len(result), 0)
+
+            self.assertEqual(result[0].dob, s3_dob)
 
             # Queries with relation between objects
             # result = Student.select(lambda s: s.group.number == g1.number)

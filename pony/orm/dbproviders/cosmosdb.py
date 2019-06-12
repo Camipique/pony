@@ -90,11 +90,12 @@ class SQLiteBuilder(SQLBuilder):
                         select_clause += [',']
                     else:
                         select_clause += [' ']
-            # elif section[0] == 'AGGREGATES':
-            #     for index in range(1, len(section)):
-            #         select_clause += ' {}(c["{}"]) ?? null'.format(section[index][0], section[index][2][2])
-            #         if index != len(section) - 1:
-            #             select_clause += ','
+            elif section[0] == 'AGGREGATES':
+                for index in range(1, len(section)):
+                    select_clause += [' VALUE {}(c["{}"]) ?? null'.format(section[index][0], section[index][2][2])]
+                    if index != len(section) - 1:
+                        select_clause += [', ']
+                select_clause += [' ']
             elif clause == "WHERE":
                 for index in range(1, len(section)):
                     operator = section[index][0]
@@ -105,25 +106,39 @@ class SQLiteBuilder(SQLBuilder):
                         cond = ' c["{}"]'
 
                         if fact1[0] == 'JSON_VALUE':
-                            cond = cond.format(section[index][1][1][2])
-                            for v in section[index][1][2]:
+                            cond = cond.format(fact1[1][2])
+                            for v in fact1[2]:
                                 cond += '["{}"]'.format(v[1])
                         else:  # if is COLUMN
-                            cond = cond.format(section[index][1][2])
+                            cond = cond.format(fact1[2])
 
-                        where_clause += [' AND', cond, builder.translate_operator(operator)]
+                        if operator == 'IN':
+                            where_clause += [' AND', cond, ' IN ', '(']
+                            for i, v in enumerate(fact2):
+                                if len(fact2) != i + 1:
+                                    if isinstance(v[1], str) or isinstance(v[1], datetime):  #check if more types should be converted to str
+                                        where_clause += ['"', v[1], '", ']
+                                    else:
+                                        where_clause += [v[1], ', ']
+                                else:
+                                    if isinstance(v[1], str) or isinstance(v[1], datetime):  # check if more types should be converted to str
+                                        where_clause += ['"', v[1], '")']
+                                    else:
+                                        where_clause += [v[1], ')']
+                        else:
+                            where_clause += [' AND', cond, builder.translate_operator(operator)]
 
-                        value_type = section[index][2][0]
-                        value = section[index][2][1]
+                            value_type = section[index][2][0]
+                            value = section[index][2][1]
 
-                        if value_type == 'PARAM':
-                            p = Param(builder.paramstyle, value, section[index][2][2])
-                            where_clause += [p]
-                        elif value_type == 'VALUE':
-                            if isinstance(value, str) or isinstance(value, datetime):
-                                where_clause += ['"', value, '"']
-                            else:
-                                where_clause += [value]
+                            if value_type == 'PARAM':
+                                p = Param(builder.paramstyle, value, section[index][2][2])
+                                where_clause += [p]
+                            elif value_type == 'VALUE':
+                                if isinstance(value, str) or isinstance(value, datetime):
+                                    where_clause += ['"', value, '"']
+                                else:
+                                    where_clause += [value]
 
         query = select_clause + from_clause + where_clause
         return query
@@ -737,7 +752,9 @@ class CosmosClientDatabase:
         return query
 
     def get_items(self, sql, args):
-        return self.client.QueryItems(self.container_id, self.generate_query(sql, args))
+        options = {}
+        options['enableCrossPartitionQuery'] = True
+        return self.client.QueryItems(self.container_id, self.generate_query(sql, args), options)
 
 
 class CosmosDBCursor:

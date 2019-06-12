@@ -91,6 +91,8 @@ class TestQuery(unittest.TestCase):
             for s in result:
                 self.assertGreater(s.gpa, 3.1)
 
+            # PK
+
             def get_group_by_pk(_id):
                 return Group[_id]
 
@@ -115,6 +117,8 @@ class TestQuery(unittest.TestCase):
             # Try to get a non existent group, using primary key
             self.assertRaises(pony.orm.core.ObjectNotFound, get_group_by_pk, 3)
 
+            # Query using dictionary values
+
             result = Group.select(lambda g: g.extra['chave2']['chave3'] == 3)[:]
             self.assertIsNotNone(result)
             self.assertNotEqual(len(result), 0)
@@ -133,11 +137,43 @@ class TestQuery(unittest.TestCase):
             self.assertIsNotNone(result)
             self.assertEqual(len(result), 0)
 
+            # Datetime
+
             result = Student.select(lambda s: s.dob > datetime(1990, 1, 1) and s.dob < datetime(2002, 1, 1))[:]
             self.assertIsNotNone(result)
             self.assertNotEqual(len(result), 0)
 
             self.assertEqual(result[0].dob, s3_dob)
+
+            result = Student.select(lambda s: s.dob < datetime(2002, 1, 1) and s.dob > datetime(1990, 1, 1))[:]
+            self.assertIsNotNone(result)
+            self.assertNotEqual(len(result), 0)
+
+            self.assertEqual(result[0].dob, s3_dob)
+
+            # Aggregation
+
+            # result = sum(s.scholarship for s in Student)[:]
+            # self.assertIsNotNone(result)
+
+            # result = avg(s.scholarship for s in Student)[:]
+            # self.assertIsNotNone(result)
+
+            # Queries using IN clause
+
+            result = Student.select(lambda s: s.name in ('S1', 'S2'))[:]
+            self.assertIsNotNone(result)
+            self.assertNotEqual(len(result), 0)
+
+            self.assertEqual(result[0].name, 'S1')
+            self.assertEqual(result[1].name, 'S2')
+
+            result = Student.select(lambda s: s.gpa in (Decimal('3.1'), Decimal('3.2')))[:]
+            self.assertIsNotNone(result)
+            self.assertNotEqual(len(result), 0)
+
+            self.assertEqual(result[0].gpa, Decimal('3.1'))
+            self.assertEqual(result[1].gpa, Decimal('3.2'))
 
             # Queries with relation between objects
             # result = Student.select(lambda s: s.group.number == g1.number)

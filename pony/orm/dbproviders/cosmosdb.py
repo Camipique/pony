@@ -14,29 +14,34 @@ from functools import wraps
 
 from pony.orm import core, dbschema, dbapiprovider
 from pony.orm.core import log_orm
-from pony.orm.ormtypes import Json, TrackedArray
+from pony.orm.ormtypes import Json, TrackedArray, TrackedValue
 from pony.orm.sqltranslation import SQLTranslator, StringExprMonad
 from pony.orm.sqlbuilding import SQLBuilder, join, make_unary_func, Param
-from pony.orm.dbapiprovider import DBAPIProvider, Pool, wrap_dbapi_exceptions
+from pony.orm.dbapiprovider import DBAPIProvider, Pool, wrap_dbapi_exceptions, Converter
 from pony.utils import datetime2timestamp, timestamp2datetime, absolutize_path, localbase, throw, reraise, \
     cut_traceback_depth
 
 from azure.cosmos import cosmos_client
 from azure.cosmos.errors import HTTPFailure
 
+
 class SqliteExtensionUnavailable(Exception):
     pass
 
+
 NoneType = type(None)
+
 
 class SQLiteForeignKey(dbschema.ForeignKey):
     def get_create_command(foreign_key):
         assert False  # pragma: no cover
 
+
 class SQLiteSchema(dbschema.DBSchema):
     dialect = 'SQLite'
     named_foreign_keys = False
     fk_class = SQLiteForeignKey
+
 
 def make_overriden_string_func(sqlop):
     def func(translator, monad):
@@ -171,22 +176,31 @@ class SQLiteBuilder(SQLBuilder):
         insert += ['}']
 
         return insert
+
     def TODAY(builder):
         return "date('now', 'localtime')"
+
     def NOW(builder):
         return "datetime('now', 'localtime')"
+
     def YEAR(builder, expr):
         return 'cast(substr(', builder(expr), ', 1, 4) as integer)'
+
     def MONTH(builder, expr):
         return 'cast(substr(', builder(expr), ', 6, 2) as integer)'
+
     def DAY(builder, expr):
         return 'cast(substr(', builder(expr), ', 9, 2) as integer)'
+
     def HOUR(builder, expr):
         return 'cast(substr(', builder(expr), ', 12, 2) as integer)'
+
     def MINUTE(builder, expr):
         return 'cast(substr(', builder(expr), ', 15, 2) as integer)'
+
     def SECOND(builder, expr):
         return 'cast(substr(', builder(expr), ', 18, 2) as integer)'
+
     def datetime_add(builder, funcname, expr, td):
         assert isinstance(td, timedelta)
         modifiers = []
@@ -209,37 +223,46 @@ class SQLiteBuilder(SQLBuilder):
             modifiers.append(", '%s%d seconds'" % (sign, seconds))
         if not modifiers: return builder(expr)
         return funcname, '(', builder(expr), modifiers, ')'
+
     def DATE_ADD(builder, expr, delta):
         if isinstance(delta, timedelta):
             return builder.datetime_add('date', expr, delta)
         return 'datetime(julianday(', builder(expr), ') + ', builder(delta), ')'
+
     def DATE_SUB(builder, expr, delta):
         if isinstance(delta, timedelta):
             return builder.datetime_add('date', expr, -delta)
         return 'datetime(julianday(', builder(expr), ') - ', builder(delta), ')'
+
     def DATETIME_ADD(builder, expr, delta):
         if isinstance(delta, timedelta):
             return builder.datetime_add('datetime', expr, delta)
         return 'datetime(julianday(', builder(expr), ') + ', builder(delta), ')'
+
     def DATETIME_SUB(builder, expr, delta):
         if isinstance(delta, timedelta):
             return builder.datetime_add('datetime', expr, -delta)
         return 'datetime(julianday(', builder(expr), ') - ', builder(delta), ')'
+
     def RANDOM(builder):
         return 'rand()'  # return '(random() / 9223372036854775807.0 + 1.0) / 2.0'
     PY_UPPER = make_unary_func('py_upper')
     PY_LOWER = make_unary_func('py_lower')
+
     def FLOAT_EQ(builder, a, b):
         a, b = builder(a), builder(b)
         return 'abs(', a, ' - ', b, ') / coalesce(nullif(max(abs(', a, '), abs(', b, ')), 0), 1) <= 1e-14'
+
     def FLOAT_NE(builder, a, b):
         a, b = builder(a), builder(b)
         return 'abs(', a, ' - ', b, ') / coalesce(nullif(max(abs(', a, '), abs(', b, ')), 0), 1) > 1e-14'
+
     def JSON_QUERY(builder, expr, path):
         fname = 'json_extract' if builder.json1_available else 'py_json_extract'
         path_sql, has_params, has_wildcards = builder.build_json_path(path)
         return 'py_json_unwrap(', fname, '(', builder(expr), ', null, ', path_sql, '))'
     json_value_type_mapping = {unicode: 'text', bool: 'integer', int: 'integer', float: 'real'}
+
     def JSON_VALUE(builder, expr, path, type):
         func_name = 'json_extract' if builder.json1_available else 'py_json_extract'
         path_sql, has_params, has_wildcards = builder.build_json_path(path)
@@ -247,28 +270,38 @@ class SQLiteBuilder(SQLBuilder):
         result = func_name, '(', builder(expr), ', ', path_sql, ')'
         if type_name is not None: result = 'CAST(', result, ' as ', type_name, ')'
         return result
+
     def JSON_NONZERO(builder, expr):
         return builder(expr), ''' NOT IN ('null', 'false', '0', '""', '[]', '{}')'''
+
     def JSON_ARRAY_LENGTH(builder, value):
         func_name = 'json_array_length' if builder.json1_available else 'py_json_array_length'
         return func_name, '(', builder(value), ')'
+
     def JSON_CONTAINS(builder, expr, path, key):
         path_sql, has_params, has_wildcards = builder.build_json_path(path)
         return 'py_json_contains(', builder(expr), ', ', path_sql, ',  ', builder(key), ')'
+
     def ARRAY_INDEX(builder, col, index):
         return 'py_array_index(', builder(col), ', ', builder(index), ')'
+
     def ARRAY_CONTAINS(builder, key, not_in, col):
         return ('NOT ' if not_in else ''), 'py_array_contains(', builder(col), ', ', builder(key), ')'
+
     def ARRAY_SUBSET(builder, array1, not_in, array2):
         return ('NOT ' if not_in else ''), 'py_array_subset(', builder(array2), ', ', builder(array1), ')'
+
     def ARRAY_LENGTH(builder, array):
         return 'py_array_length(', builder(array), ')'
+
     def ARRAY_SLICE(builder, array, start, stop):
         return 'py_array_slice(', builder(array), ', ', \
                builder(start) if start else 'null', ',',\
                builder(stop) if stop else 'null', ')'
+
     def MAKE_ARRAY(builder, *items):
         return 'py_make_array(', join(', ', (builder(item) for item in items)), ')'
+
 
 class SQLiteIntConverter(dbapiprovider.IntConverter):
     def sql_type(converter):
@@ -276,16 +309,19 @@ class SQLiteIntConverter(dbapiprovider.IntConverter):
         if attr is not None and attr.auto: return 'INTEGER'  # Only this type can have AUTOINCREMENT option
         return dbapiprovider.IntConverter.sql_type(converter)
 
+
 class SQLiteDecimalConverter(dbapiprovider.DecimalConverter):
     inf = Decimal('infinity')
     neg_inf = Decimal('-infinity')
     NaN = Decimal('NaN')
+
     def sql2py(converter, val):
         try: val = Decimal(str(val))
         except: return val
         exp = converter.exp
         if exp is not None: val = val.quantize(exp)
         return val
+
     def py2sql(converter, val):
         if type(val) is not Decimal: val = Decimal(val)
         exp = converter.exp
@@ -295,14 +331,17 @@ class SQLiteDecimalConverter(dbapiprovider.DecimalConverter):
             val = val.quantize(exp)
         return str(val)
 
+
 class SQLiteDateConverter(dbapiprovider.DateConverter):
     def sql2py(converter, val):
         try:
             time_tuple = strptime(val[:10], '%Y-%m-%d')
             return date(*time_tuple[:3])
         except: return val
+
     def py2sql(converter, val):
         return val.strftime('%Y-%m-%d')
+
 
 class SQLiteTimeConverter(dbapiprovider.TimeConverter):
     def sql2py(converter, val):
@@ -311,27 +350,72 @@ class SQLiteTimeConverter(dbapiprovider.TimeConverter):
             else: dt = datetime.strptime(val, '%H:%M:%S.%f')
             return dt.time()
         except: return val
+
     def py2sql(converter, val):
         return val.isoformat()
+
 
 class SQLiteTimedeltaConverter(dbapiprovider.TimedeltaConverter):
     def sql2py(converter, val):
         return timedelta(days=val)
+
     def py2sql(converter, val):
         return val.days + (val.seconds + val.microseconds / 1000000.0) / 86400.0
+
 
 class SQLiteDatetimeConverter(dbapiprovider.DatetimeConverter):
     def sql2py(converter, val):
         try: return timestamp2datetime(val)
         except: return val
+
     def py2sql(converter, val):
         return datetime2timestamp(val)
 
-class SQLiteJsonConverter(dbapiprovider.JsonConverter):
+
+class JsonConverter(Converter):
+    json_kwargs = {}
+
+    class JsonEncoder(json.JSONEncoder):
+        def default(converter, obj):
+            if isinstance(obj, Json):
+                return obj.wrapped
+            return json.JSONEncoder.default(converter, obj)
+
+    def validate(converter, val, obj=None):
+        if obj is None or converter.attr is None:
+            return val
+        if isinstance(val, TrackedValue) and val.obj_ref() is obj and val.attr is converter.attr:
+            return val
+        return TrackedValue.make(obj, converter.attr, val)
+
+    def val2dbval(converter, val, obj=None):
+        return json.dumps(val, cls=converter.JsonEncoder, **converter.json_kwargs)
+
+    def dbval2val(converter, dbval, obj=None):
+        if isinstance(dbval, (int, bool, float, type(None), dict)):
+            return dbval
+        val = json.loads(dbval)
+        if obj is None:
+            return val
+        return TrackedValue.make(obj, converter.attr, val)
+
+    def dbvals_equal(converter, x, y):
+        if x == y: return True  # optimization
+        if isinstance(x, basestring): x = json.loads(x)
+        if isinstance(y, basestring): y = json.loads(y)
+        return x == y
+
+    def sql_type(converter):
+        return "JSON"
+
+
+class SQLiteJsonConverter(JsonConverter):
     json_kwargs = {'separators': (',', ':'), 'sort_keys': True, 'ensure_ascii': False}
+
 
 def dumps(items):
     return json.dumps(items, **SQLiteJsonConverter.json_kwargs)
+
 
 class SQLiteArrayConverter(dbapiprovider.ArrayConverter):
     array_types = {
@@ -350,12 +434,15 @@ class SQLiteArrayConverter(dbapiprovider.ArrayConverter):
     def val2dbval(converter, val, obj=None):
         return dumps(val)
 
+
 class LocalExceptions(localbase):
     def __init__(self):
         self.exc_info = None
         self.keep_traceback = False
 
+
 local_exceptions = LocalExceptions()
+
 
 def keep_exception(func):
     @wraps(func)

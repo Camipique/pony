@@ -122,12 +122,18 @@ class SQLiteBuilder(SQLBuilder):
                             for i, v in enumerate(fact2):
                                 if len(fact2) != i + 1:
                                     if isinstance(v[1], str) or isinstance(v[1], datetime):  #check if more types should be converted to str
-                                        where_clause += ['"', v[1], '", ']
+                                        if isinstance(v[1], datetime):
+                                            where_clause += ['"', v[1].strftime('%Y-%m-%d %H:%M:%S.%f'), '", ']
+                                        else:
+                                            where_clause += ['"', v[1], '", ']
                                     else:
                                         where_clause += [v[1], ', ']
                                 else:
                                     if isinstance(v[1], str) or isinstance(v[1], datetime):  # check if more types should be converted to str
-                                        where_clause += ['"', v[1], '")']
+                                        if isinstance(v[1], datetime):
+                                            where_clause += ['"', v[1].strftime('%Y-%m-%d %H:%M:%S.%f'), '")']
+                                        else:
+                                            where_clause += ['"', v[1], '")']
                                     else:
                                         where_clause += [v[1], ')']
                         else:

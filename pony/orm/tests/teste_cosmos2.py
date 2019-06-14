@@ -7,11 +7,15 @@ from decimal import Decimal
 from pony.orm.core import *
 from pony.orm.tests.testutils import *
 
-db = Database('cosmosdb', 'https://localhost:8081', 'C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw==', 'SchoolDatabase', 'School')
+db = Database('cosmosdb',
+              'https://localhost:8081',
+              'C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMsEcaGQy67XIw/Jw==',
+              'SchoolDatabase',
+              'School')
 
 
 class Student(db.Entity):
-    id = PrimaryKey(int)
+    student_id = PrimaryKey(int)
     name = Required(unicode)
     scholarship = Optional(int)
     gpa = Optional(Decimal, 3, 1)
@@ -29,6 +33,13 @@ class Group(db.Entity):
 
 db.generate_mapping(create_tables=True)
 
+with db_session:
+    g1 = Group(number=1, name="group1", extra={"chave1": "valor1", "chave2": 2})
+    g2 = Group(number=2, name="group2", extra={"chave1": "valor2", "chave2": {"chave3": 3}})
+    s1 = Student(student_id=1, name='S1', group=g1, gpa=3.1)
+    s2 = Student(student_id=2, name='S2', group=g1, gpa=3.2, scholarship=100, dob=datetime(2010, 1, 1))
+    s3 = Student(student_id=3, name='S3', group=g1, gpa=3.3, scholarship=200, dob=datetime(2001, 1, 2))
+
 
 class TestQuery(unittest.TestCase):
     def setUp(self):
@@ -39,36 +50,8 @@ class TestQuery(unittest.TestCase):
         rollback()
         db_session.__exit__()
 
-    def test1(self):
+    def test_simple_condition(self):
         with db_session:
-            s3_dob = datetime(2001, 1, 2)
-
-            g1 = Group(number=1, name="group1", extra={"chave1": "valor1", "chave2": 2})
-            g2 = Group(number=2, name="group2", extra={"chave1": "valor2", "chave2": { "chave3": 3}})
-            s1 = Student(id=1, name='S1', group=g1, gpa=3.1)
-            s2 = Student(id=2, name='S2', group=g1, gpa=3.2, scholarship=100, dob=datetime(2010, 1, 1))
-            s3 = Student(id=3, name='S3', group=g1, gpa=3.3, scholarship=200, dob=s3_dob)
-
-            # Select all groups
-            result = Group.select()[:]
-            self.assertIsNotNone(result)
-
-            group1 = result[0]
-
-            self.assertEqual(group1.number, g1.number)
-
-            # Select all students
-            result = Student.select()[:]
-            self.assertIsNotNone(result)
-
-            student1 = result[0]
-            student2 = result[1]
-            student3 = result[2]
-
-            self.assertEqual(s1, student1)
-            self.assertEqual(s2, student2)
-            self.assertEqual(s3, student3)
-
             # Simple select with conditions
             result = Group.select(lambda g: g.number == 1)[:]
             self.assertIsNotNone(result)
@@ -91,34 +74,92 @@ class TestQuery(unittest.TestCase):
             for s in result:
                 self.assertGreater(s.gpa, 3.1)
 
-            # PK
+    def test_select_all(self):
+        with db_session:
+            # Select all groups
+            result = Group.select()[:]
+            self.assertIsNotNone(result)
 
+            group1 = result[0]
+            group2 = result[1]
+
+            self.assertEqual(group1.number, g1.number)
+            self.assertEqual(group1.name, g1.name)
+            self.assertEqual(group1.extra, g1.extra)
+
+            self.assertEqual(group2.number, g2.number)
+            self.assertEqual(group2.name, g2.name)
+            self.assertEqual(group2.extra, g2.extra)
+
+            # Select all students
+            result = Student.select()[:]
+            self.assertIsNotNone(result)
+
+            student1 = result[0]
+            student2 = result[1]
+            student3 = result[2]
+
+            self.assertEqual(s1.student_id, student1.student_id)
+            self.assertEqual(s1.name, student1.name)
+            self.assertEqual(s1.group.name, student1.group.name)
+            self.assertEqual(s1.gpa, student1.gpa)
+            self.assertEqual(s1.extra, student1.extra)
+
+            self.assertEqual(s2.student_id, student2.student_id)
+            self.assertEqual(s2.name, student2.name)
+            self.assertEqual(s2.group.name, student2.group.name)
+            self.assertEqual(s2.gpa, student2.gpa)
+            self.assertEqual(s2.scholarship, student2.scholarship)
+            self.assertEqual(s2.dob, student2.dob)
+            self.assertEqual(s2.extra, student2.extra)
+
+            self.assertEqual(s3.student_id, student3.student_id)
+            self.assertEqual(s3.name, student3.name)
+            self.assertEqual(s3.group.name, student3.group.name)
+            self.assertEqual(s3.gpa, student3.gpa)
+            self.assertEqual(s3.scholarship, student3.scholarship)
+            self.assertEqual(s3.dob, student3.dob)
+            self.assertEqual(s3.extra, student3.extra)
+
+    def test_pk(self):
+        with db_session:
             def get_group_by_pk(_id):
                 return Group[_id]
 
             def get_student_by_pk(_id):
                 return Student[_id]
 
-            # Get student object by primary key
             result = get_student_by_pk(2)
             self.assertIsNotNone(result)
 
-            self.assertEqual(s2, result)
+            student2 = result
+
+            self.assertEqual(s2.student_id, student2.student_id)
+            self.assertEqual(s2.name, student2.name)
+            self.assertEqual(s2.group.name, student2.group.name)
+            self.assertEqual(s2.gpa, student2.gpa)
+            self.assertEqual(s2.scholarship, student2.scholarship)
+            self.assertEqual(s2.dob, student2.dob)
+            self.assertEqual(s2.extra, student2.extra)
 
             # Try to get a non existent student, using primary key
             self.assertRaises(pony.orm.core.ObjectNotFound, get_student_by_pk, 4)
 
-            # Get group object by primary key
             result = get_group_by_pk(1)
             self.assertIsNotNone(result)
 
-            self.assertEqual(g1, result)
+            group1 = result
+
+            self.assertEqual(group1.number, g1.number)
+            self.assertEqual(group1.name, g1.name)
+            self.assertEqual(group1.extra, g1.extra)
 
             # Try to get a non existent group, using primary key
             self.assertRaises(pony.orm.core.ObjectNotFound, get_group_by_pk, 3)
 
+    def test_dict_queries(self):
+        with db_session:
             # Query using dictionary values
-
             result = Group.select(lambda g: g.extra['chave2']['chave3'] == 3)[:]
             self.assertIsNotNone(result)
             self.assertNotEqual(len(result), 0)
@@ -137,30 +178,36 @@ class TestQuery(unittest.TestCase):
             self.assertIsNotNone(result)
             self.assertEqual(len(result), 0)
 
+    def test_datetime_queries(self):
+        with db_session:
             # Datetime
 
             result = Student.select(lambda s: s.dob > datetime(1990, 1, 1) and s.dob < datetime(2002, 1, 1))[:]
             self.assertIsNotNone(result)
             self.assertNotEqual(len(result), 0)
 
-            self.assertEqual(result[0].dob, s3_dob)
+            self.assertEqual(result[0].dob, datetime(2001, 1, 2))
 
             result = Student.select(lambda s: s.dob < datetime(2002, 1, 1) and s.dob > datetime(1990, 1, 1))[:]
             self.assertIsNotNone(result)
             self.assertNotEqual(len(result), 0)
 
-            self.assertEqual(result[0].dob, s3_dob)
+            self.assertEqual(result[0].dob, datetime(2001, 1, 2))
 
+    def test_aggregate_queries(self):
+        with db_session:
+            # pass
             # Aggregation
 
-            # result = sum(s.scholarship for s in Student)[:]
-            # self.assertIsNotNone(result)
+            result = sum(s.scholarship for s in Student)[:]
+            self.assertIsNotNone(result)
 
-            # result = avg(s.scholarship for s in Student)[:]
-            # self.assertIsNotNone(result)
+            result = avg(s.scholarship for s in Student)[:]
+            self.assertIsNotNone(result)
 
+    def test_in_queries(self):
+        with db_session:
             # Queries using IN clause
-
             result = Student.select(lambda s: s.name in ('S1', 'S2'))[:]
             self.assertIsNotNone(result)
             self.assertNotEqual(len(result), 0)
@@ -175,23 +222,30 @@ class TestQuery(unittest.TestCase):
             self.assertEqual(result[0].gpa, Decimal('3.1'))
             self.assertEqual(result[1].gpa, Decimal('3.2'))
 
-            # Queries with relation between objects
-            # result = Student.select(lambda s: s.group.number == g1.number)
-            #
-            # for s in result:
-            #     self.assertEqual(s.group.number, g1.number)
-            #     self.assertEqual(s.group.name, g1.name)
-            #
-            # result = Student.select(lambda s: s.group.name == g1.name)
-            #
-            # for s in result:
-            #     self.assertEqual(s.group.number, g1.number)
-            #     self.assertEqual(s.group.name, g1.name)
-            #
-            # result = Student.select(lambda s: s.group.number == g2.number)
-            #
-            # for s in result:
-            #     self.assertEqual(s.group.number, g1.number)
+            result = Student.select(lambda s: s.dob in (datetime(2010, 1, 1), datetime(2001, 1, 2)))[:]
+            self.assertIsNotNone(result)
+            self.assertNotEqual(len(result), 0)
+
+            self.assertEqual(result[0].dob, datetime(2010, 1, 1))
+            self.assertEqual(result[1].dob, datetime(2001, 1, 2))
+
+# Queries with relation between objects
+# result = Student.select(lambda s: s.group.number == g1.number)
+#
+# for s in result:
+#     self.assertEqual(s.group.number, g1.number)
+#     self.assertEqual(s.group.name, g1.name)
+#
+# result = Student.select(lambda s: s.group.name == g1.name)
+#
+# for s in result:
+#     self.assertEqual(s.group.number, g1.number)
+#     self.assertEqual(s.group.name, g1.name)
+#
+# result = Student.select(lambda s: s.group.number == g2.number)
+#
+# for s in result:
+#     self.assertEqual(s.group.number, g1.number)
 
 
 if __name__ == '__main__':

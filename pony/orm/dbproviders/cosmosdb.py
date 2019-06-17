@@ -18,6 +18,7 @@ from pony.orm.ormtypes import Json, TrackedArray, TrackedValue
 from pony.orm.sqltranslation import SQLTranslator, StringExprMonad
 from pony.orm.sqlbuilding import SQLBuilder, join, make_unary_func, Param
 from pony.orm.dbapiprovider import DBAPIProvider, Pool, wrap_dbapi_exceptions, Converter
+from pony.orm.dbschema import DBSchema
 from pony.utils import datetime2timestamp, timestamp2datetime, absolutize_path, localbase, throw, reraise, \
     cut_traceback_depth
 
@@ -37,7 +38,7 @@ class SQLiteForeignKey(dbschema.ForeignKey):
         assert False  # pragma: no cover
 
 
-class SQLiteSchema(dbschema.DBSchema):
+class SQLiteSchema(DBSchema):
     dialect = 'SQLite'
     named_foreign_keys = False
     fk_class = SQLiteForeignKey
@@ -53,18 +54,12 @@ def make_overriden_string_func(sqlop):
     return func
 
 
-class SQLiteTranslator(SQLTranslator):
+class CosmosDBTranslator(SQLTranslator):
     dialect = 'SQLite'
-    sqlite_version = sqlite.sqlite_version_info
-    row_value_syntax = False
-    rowid_support = True
-
-    StringMixin_UPPER = make_overriden_string_func('PY_UPPER')
-    StringMixin_LOWER = make_overriden_string_func('PY_LOWER')
 
 
-class SQLiteBuilder(SQLBuilder):
-    dialect = 'SQLite'
+class CosmosDBBuilder(SQLBuilder):
+    dialect = 'CosmosDB'
     least_func_name = 'min'
     greatest_func_name = 'max'
 
@@ -78,7 +73,7 @@ class SQLiteBuilder(SQLBuilder):
 
     def SELECT(builder, *sections):
 
-        from_clause = ['FROM ', 'c ']
+        from_clause = ['FROM c ']
         select_clause = ['SELECT']
         where_clause = ['WHERE']
 
@@ -86,15 +81,16 @@ class SQLiteBuilder(SQLBuilder):
             clause = section[0]
 
             if clause == 'FROM':
-                doc_type = '"' + section[1][2] + '"'
-                where_clause += [' c["doc_type"]', '=', doc_type]
-            elif clause == 'ALL':
+                doc_type = section[1][2]
+                where_clause.append(' c["doc_type"]="%s"' % doc_type)
+            elif clause == 'ALL':  # include this attributes in the SELECT clause
                 for index in range(1, len(section)):
-                    select_clause += [' c["{}"] ?? null'.format(section[index][2])]
-                    if index != len(section) - 1:
-                        select_clause += [',']
-                    else:
-                        select_clause += [' ']
+                    attribute = section[index][2]
+                    select_clause.append(' c["%s"] ?? null,' % attribute)
+                    if index == len(section) - 1:
+                        remove_last_comma = ''.join(list(select_clause[-1])[:-1])
+                        select_clause.pop()
+                        select_clause.append('%s ' % remove_last_comma)
             elif section[0] == 'AGGREGATES':
                 for index in range(1, len(section)):
                     select_clause += [' VALUE {}(c["{}"]) ?? null'.format(section[index][0], section[index][2][2])]
@@ -309,14 +305,14 @@ class SQLiteBuilder(SQLBuilder):
         return 'py_make_array(', join(', ', (builder(item) for item in items)), ')'
 
 
-class SQLiteIntConverter(dbapiprovider.IntConverter):
+class CosmosDBIntConverter(dbapiprovider.IntConverter):
     def sql_type(converter):
         attr = converter.attr
         if attr is not None and attr.auto: return 'INTEGER'  # Only this type can have AUTOINCREMENT option
         return dbapiprovider.IntConverter.sql_type(converter)
 
 
-class SQLiteDecimalConverter(dbapiprovider.DecimalConverter):
+class CosmosDBDecimalConverter(dbapiprovider.DecimalConverter):
     inf = Decimal('infinity')
     neg_inf = Decimal('-infinity')
     NaN = Decimal('NaN')
@@ -338,7 +334,7 @@ class SQLiteDecimalConverter(dbapiprovider.DecimalConverter):
         return str(val)
 
 
-class SQLiteDateConverter(dbapiprovider.DateConverter):
+class CosmosDBDateConverter(dbapiprovider.DateConverter):
     def sql2py(converter, val):
         try:
             time_tuple = strptime(val[:10], '%Y-%m-%d')
@@ -349,7 +345,7 @@ class SQLiteDateConverter(dbapiprovider.DateConverter):
         return val.strftime('%Y-%m-%d')
 
 
-class SQLiteTimeConverter(dbapiprovider.TimeConverter):
+class CosmosDBTimeConverter(dbapiprovider.TimeConverter):
     def sql2py(converter, val):
         try:
             if len(val) <= 8: dt = datetime.strptime(val, '%H:%M:%S')
@@ -361,7 +357,7 @@ class SQLiteTimeConverter(dbapiprovider.TimeConverter):
         return val.isoformat()
 
 
-class SQLiteTimedeltaConverter(dbapiprovider.TimedeltaConverter):
+class CosmosDBTimedeltaConverter(dbapiprovider.TimedeltaConverter):
     def sql2py(converter, val):
         return timedelta(days=val)
 
@@ -369,33 +365,19 @@ class SQLiteTimedeltaConverter(dbapiprovider.TimedeltaConverter):
         return val.days + (val.seconds + val.microseconds / 1000000.0) / 86400.0
 
 
-class SQLiteDatetimeConverter(dbapiprovider.DatetimeConverter):
+class CosmosDBDatetimeConverter(dbapiprovider.DatetimeConverter):
     def sql2py(converter, val):
-        try: return timestamp2datetime(val)
-        except: return val
+        try:
+            return timestamp2datetime(val)
+        except:
+            return val
 
     def py2sql(converter, val):
         return datetime2timestamp(val)
 
 
-class JsonConverter(Converter):
-    json_kwargs = {}
-
-    class JsonEncoder(json.JSONEncoder):
-        def default(converter, obj):
-            if isinstance(obj, Json):
-                return obj.wrapped
-            return json.JSONEncoder.default(converter, obj)
-
-    def validate(converter, val, obj=None):
-        if obj is None or converter.attr is None:
-            return val
-        if isinstance(val, TrackedValue) and val.obj_ref() is obj and val.attr is converter.attr:
-            return val
-        return TrackedValue.make(obj, converter.attr, val)
-
-    def val2dbval(converter, val, obj=None):
-        return json.dumps(val, cls=converter.JsonEncoder, **converter.json_kwargs)
+class CosmosDBJsonConverter(dbapiprovider.JsonConverter):
+    json_kwargs = {'separators': (',', ':'), 'sort_keys': True, 'ensure_ascii': False}
 
     def dbval2val(converter, dbval, obj=None):
         if isinstance(dbval, (int, bool, float, type(None), dict)):
@@ -405,27 +387,14 @@ class JsonConverter(Converter):
             return val
         return TrackedValue.make(obj, converter.attr, val)
 
-    def dbvals_equal(converter, x, y):
-        if x == y: return True  # optimization
-        if isinstance(x, basestring): x = json.loads(x)
-        if isinstance(y, basestring): y = json.loads(y)
-        return x == y
-
-    def sql_type(converter):
-        return "JSON"
-
-
-class SQLiteJsonConverter(JsonConverter):
-    json_kwargs = {'separators': (',', ':'), 'sort_keys': True, 'ensure_ascii': False}
-
 
 def dumps(items):
-    return json.dumps(items, **SQLiteJsonConverter.json_kwargs)
+    return json.dumps(items, **CosmosDBJsonConverter.json_kwargs)
 
 
-class SQLiteArrayConverter(dbapiprovider.ArrayConverter):
+class CosmosDBArrayConverter(dbapiprovider.ArrayConverter):
     array_types = {
-        int: ('int', SQLiteIntConverter),
+        int: ('int', CosmosDBIntConverter),
         unicode: ('text', dbapiprovider.StrConverter),
         float: ('real', dbapiprovider.RealConverter)
     }
@@ -472,11 +441,11 @@ class CosmosDBProvider(DBAPIProvider):
     local_exceptions = local_exceptions
     max_name_len = 1024
 
-    dbapi_module = sqlite
+    dbapi_module = cosmos_client
     dbschema_cls = SQLiteSchema
-    translator_cls = SQLiteTranslator
-    sqlbuilder_cls = SQLiteBuilder
-    array_converter_cls = SQLiteArrayConverter
+    translator_cls = CosmosDBTranslator
+    sqlbuilder_cls = CosmosDBBuilder
+    array_converter_cls = CosmosDBArrayConverter
 
     name_before_table = 'db_name'
 
@@ -486,16 +455,16 @@ class CosmosDBProvider(DBAPIProvider):
         (NoneType, dbapiprovider.NoneConverter),
         (bool, dbapiprovider.BoolConverter),
         (basestring, dbapiprovider.StrConverter),
-        (int_types, SQLiteIntConverter),
+        (int_types, CosmosDBIntConverter),
         (float, dbapiprovider.RealConverter),
-        (Decimal, SQLiteDecimalConverter),
-        (datetime, SQLiteDatetimeConverter),
-        (date, SQLiteDateConverter),
-        (time, SQLiteTimeConverter),
-        (timedelta, SQLiteTimedeltaConverter),
+        (Decimal, CosmosDBDecimalConverter),
+        (datetime, CosmosDBDatetimeConverter),
+        (date, CosmosDBDateConverter),
+        (time, CosmosDBTimeConverter),
+        (timedelta, CosmosDBTimedeltaConverter),
         (UUID, dbapiprovider.UuidConverter),
         (buffer, dbapiprovider.BlobConverter),
-        (Json, SQLiteJsonConverter)
+        (Json, CosmosDBJsonConverter)
     ]
 
     def __init__(provider, *args, **kwargs):
@@ -827,7 +796,8 @@ class CosmosClientDatabase:
     def insert_doc(self, doc):
         self.client.CreateItem(self.container_id, doc)
 
-    def generate_query(self, sql, args):
+    @staticmethod
+    def generate_query(sql, args):
         parameters = []
 
         for i in range(len(args)):
@@ -861,8 +831,8 @@ class CosmosDBCursor:
         cursor.sql = sql
         cursor.arguments = arguments
 
-        print(cursor.sql)
-        print(cursor.arguments)
+        print(sql)
+        print(arguments)
 
         if cursor.sql.startswith('I'):
             cursor.insert(sql, arguments)
@@ -912,7 +882,7 @@ class CosmosDBConnection:
 
 
 class CosmosDBPool(Pool):
-    def __init__(pool, endpoint, primary_key, database_name, container_name, **kwargs):  # called separately in each thread
+    def __init__(pool, endpoint, primary_key, database_name, container_name, **kwargs):
         pool.endpoint = endpoint
         pool.primary_key = primary_key
         pool.database_name = database_name

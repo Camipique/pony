@@ -91,27 +91,31 @@ class CosmosDBBuilder(SQLBuilder):
                         remove_last_comma = ''.join(list(select_clause[-1])[:-1])
                         select_clause.pop()
                         select_clause.append('%s ' % remove_last_comma)
-            elif section[0] == 'AGGREGATES':
+            elif clause == 'AGGREGATES':
                 for index in range(1, len(section)):
-                    select_clause += [' VALUE {}(c["{}"]) ?? null'.format(section[index][0], section[index][2][2])]
+                    agg_fun = section[index][0]
+                    attribute = section[index][2][2]
+                    select_clause.append(' VALUE %s(c["%s"]) ?? null' % (agg_fun, attribute))
                     if index != len(section) - 1:
-                        select_clause += [', ']
-                select_clause += [' ']
+                        select_clause.append(', ')
+                select_clause.append(' ')
             elif clause == "WHERE":
                 for index in range(1, len(section)):
                     operator = section[index][0]
                     fact1 = section[index][1]
                     fact2 = section[index][2]
-                    if (fact1[0] != 'VALUE') or (fact2[0] != 'VALUE'):  # because of the 1 = 0 clause, check later
+                    if (fact1[1] != 0) or (fact2[1] != 1):  # because of the 1 = 0 ping to the database
 
-                        cond = ' c["{}"]'
+                        cond = ' c["%s"]'
 
                         if fact1[0] == 'JSON_VALUE':
-                            cond = cond.format(fact1[1][2])
+                            attribute = fact1[1][2]
+                            cond = cond % attribute
                             for v in fact1[2]:
                                 cond += '["{}"]'.format(v[1])
                         else:  # if is COLUMN
-                            cond = cond.format(fact1[2])
+                            attribute = fact1[2]
+                            cond = cond % attribute
 
                         if operator == 'IN':
                             where_clause += [' AND', cond, ' IN ', '(']
@@ -147,7 +151,9 @@ class CosmosDBBuilder(SQLBuilder):
                                 else:
                                     where_clause += [value]
 
-        query = select_clause + from_clause + where_clause
+        query = []
+        query.extend([select_clause, from_clause, where_clause])
+
         return query
 
     def translate_operator(builder, operator):
@@ -163,19 +169,18 @@ class CosmosDBBuilder(SQLBuilder):
         return operator_dict.get(operator, None)
 
     def INSERT(builder, table_name, columns, values, returning=None):
-        insert = ['I ', '{']
-
-        insert += ['"doc_type":', '"' + table_name + '"']
+        insert = ['I {"doc_type":"%s"' % table_name]
 
         for i, att in enumerate(columns):
-            insert += [', ', '"{}":'.format(att)]
-
-            if values[i][2].py_type in (str, datetime) or att == 'id':
-                insert += ['"', Param(builder.paramstyle, (i, None, None), values[i][2]), '"']
+            insert.append(', "%s":' % att)
+            param_key = values[i][1]
+            converter = values[i][2]
+            if converter.py_type in (None, bool, int, float, list, Decimal, dict, Json):
+                insert.append(Param(builder.paramstyle, param_key, converter))
             else:
-                insert += [Param(builder.paramstyle, (i, None, None), values[i][2])]
+                insert.extend(['"', Param(builder.paramstyle, param_key, converter), '"'])
 
-        insert += ['}']
+        insert.append('}')
 
         return insert
 
@@ -449,8 +454,6 @@ class CosmosDBProvider(DBAPIProvider):
 
     name_before_table = 'db_name'
 
-    server_version = sqlite.sqlite_version_info
-
     converter_classes = [
         (NoneType, dbapiprovider.NoneConverter),
         (bool, dbapiprovider.BoolConverter),
@@ -666,7 +669,7 @@ def _extract(expr, *paths):
 def py_json_extract(expr, *paths):
     result = _extract(expr, *paths)
     if type(result) in (list, dict):
-        result = json.dumps(result, **SQLiteJsonConverter.json_kwargs)
+        result = json.dumps(result, **CosmosDBJsonConverter.json_kwargs)
     return result
 
 
@@ -675,7 +678,7 @@ def py_json_query(expr, path, with_wrapper):
     if type(result) not in (list, dict):
         if not with_wrapper: return None
         result = [result]
-    return json.dumps(result, **SQLiteJsonConverter.json_kwargs)
+    return json.dumps(result, **CosmosDBJsonConverter.json_kwargs)
 
 
 def py_json_value(expr, path):
@@ -831,8 +834,7 @@ class CosmosDBCursor:
         cursor.sql = sql
         cursor.arguments = arguments
 
-        print(sql)
-        print(arguments)
+        # print(sql)
 
         if cursor.sql.startswith('I'):
             cursor.insert(sql, arguments)

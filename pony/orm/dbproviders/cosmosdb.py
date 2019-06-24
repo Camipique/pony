@@ -111,45 +111,40 @@ class CosmosDBBuilder(SQLBuilder):
                         if fact1[0] == 'JSON_VALUE':
                             attribute = fact1[1][2]
                             cond = cond % attribute
-                            for v in fact1[2]:
-                                cond += '["{}"]'.format(v[1])
+                            for json_field in fact1[2]:
+                                cond += '["%s"]' % json_field[1]
                         else:  # if is COLUMN
                             attribute = fact1[2]
                             cond = cond % attribute
 
                         if operator == 'IN':
-                            where_clause += [' AND', cond, ' IN ', '(']
+                            where_clause.append(' AND %s IN (' % cond)
                             for i, v in enumerate(fact2):
-                                if len(fact2) != i + 1:
-                                    if isinstance(v[1], str) or isinstance(v[1], datetime):  #check if more types should be converted to str
-                                        if isinstance(v[1], datetime):
-                                            where_clause += ['"', v[1].strftime('%Y-%m-%d %H:%M:%S.%f'), '", ']
-                                        else:
-                                            where_clause += ['"', v[1], '", ']
-                                    else:
-                                        where_clause += [v[1], ', ']
+                                value = v[1]
+                                if isinstance(value, datetime):
+                                    where_clause.append('"%s",' % value.strftime('%Y-%m-%d %H:%M:%S.%f'))
+                                elif isinstance(value, str):
+                                    where_clause.append('"%s",' % value)
                                 else:
-                                    if isinstance(v[1], str) or isinstance(v[1], datetime):  # check if more types should be converted to str
-                                        if isinstance(v[1], datetime):
-                                            where_clause += ['"', v[1].strftime('%Y-%m-%d %H:%M:%S.%f'), '")']
-                                        else:
-                                            where_clause += ['"', v[1], '")']
-                                    else:
-                                        where_clause += [v[1], ')']
-                        else:
-                            where_clause += [' AND', cond, builder.translate_operator(operator)]
+                                    where_clause.append('%s,' % value)
 
-                            value_type = section[index][2][0]
-                            value = section[index][2][1]
+                            last = where_clause.pop()
+                            last = last.replace(last[-1], ')')
+                            where_clause.append(last)
+                        else:
+                            where_clause.append(' AND %s%s' % (cond, builder.translate_operator(operator)))
+
+                            value_type = fact2[0]
+                            value = fact2[1]
 
                             if value_type == 'PARAM':
-                                p = Param(builder.paramstyle, value, section[index][2][2])
-                                where_clause += [p]
+                                converter = fact2[2]
+                                where_clause.append(Param(builder.paramstyle, value, converter))
                             elif value_type == 'VALUE':
-                                if isinstance(value, str) or isinstance(value, datetime):
-                                    where_clause += ['"', value, '"']
+                                if isinstance(value, (str, datetime)):
+                                    where_clause.append('"%s"' % value)
                                 else:
-                                    where_clause += [value]
+                                    where_clause.append(value)
 
         query = []
         query.extend([select_clause, from_clause, where_clause])
@@ -803,6 +798,9 @@ class CosmosClientDatabase:
     def generate_query(sql, args):
         parameters = []
 
+        if args is None:
+            return {'query': sql}
+
         for i in range(len(args)):
             param_dict = {
                 'name': "@p{}".format(i + 1),
@@ -828,13 +826,14 @@ class CosmosDBCursor:
         cursor.client = client
         cursor.sql = None
         cursor.arguments = None
+        cursor.description = []
         cursor.query_results = []
 
     def execute(cursor, sql, arguments):
         cursor.sql = sql
         cursor.arguments = arguments
 
-        # print(sql)
+        print(sql)
 
         if cursor.sql.startswith('I'):
             cursor.insert(sql, arguments)
@@ -855,7 +854,22 @@ class CosmosDBCursor:
 
     def fetchall(cursor):
         result = cursor.client.get_items(cursor.sql, cursor.arguments)
-        return [tuple(item.values()) for item in result]
+        list = []
+
+        for item in result:
+            keys = item.keys()
+            l = []
+
+            for i, k in enumerate(keys):
+                if not k.startswith('_'):
+                    if k not in cursor.description:
+                        cursor.description.append(k)
+
+                    l.append(item[k])
+
+            list.append(tuple(l))
+
+        return list
 
 
 class CosmosDBConnection:

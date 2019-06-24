@@ -50,6 +50,33 @@ class TestQuery(unittest.TestCase):
         rollback()
         db_session.__exit__()
 
+    def test_raw_sql(self):
+        result = db.select('SELECT * FROM c WHERE c["doc_type"]="Student"')
+        self.assertEqual(len(result), 3)
+
+        result = db.select('SELECT c["name"], c["gpa"] FROM c WHERE c["doc_type"]="Student"')
+        self.assertEqual(len(result), 3)
+
+        result = db.select('SELECT c["name"] ?? null, c["gpa"] ?? null FROM c WHERE c["doc_type"]="Student"')
+        self.assertEqual(len(result), 3)
+
+        result = db.select('SELECT c["name"], c["dob"] FROM c WHERE c["doc_type"]="Student"')
+        self.assertEqual(len(result), 3)
+
+        result = db.select('SELECT c["name"] ?? null, c["dob"] ?? null FROM c WHERE c["doc_type"]="Student"') # None for optional fields
+        self.assertEqual(len(result), 3)
+
+    def test_update(self):
+        pass
+        # with db_session:
+        #     result = Student[1]
+        #     result.name = 'update'
+        #     commit()
+        #
+        # with db_session:
+        #     result = Student[1]
+        #     self.assertEqual(result.name, 'update')
+
     def test_simple_condition(self):
         with db_session:
             # Simple select with conditions

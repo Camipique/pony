@@ -71,6 +71,19 @@ class CosmosDBBuilder(SQLBuilder):
         assert not builder.indent
         return builder.SELECT(*sections)
 
+
+    def UPDATE(builder, table_name, pairs, where=None):
+
+        sections = []
+        sections.append(['ALL', '*'])
+        sections.append(['FROM',[None, None, table_name]])
+        sections.append(where)
+        updated = join(', ', [ ('c[' + builder.quote_name(name) + ']', '=', builder(param)) for name, param in pairs])
+        updated = [' UPDATED '] + updated
+        up = ['U '] + builder.SELECT(*sections) + updated
+
+        return up
+
     def SELECT(builder, *sections):
 
         from_clause = ['FROM c ']
@@ -84,6 +97,9 @@ class CosmosDBBuilder(SQLBuilder):
                 doc_type = section[1][2]
                 where_clause.append(' c["doc_type"]="%s"' % doc_type)
             elif clause == 'ALL':  # include this attributes in the SELECT clause
+                if section[1] == '*':
+                    select_clause.append(' * ')
+                    continue
                 for index in range(1, len(section)):
                     attribute = section[index][2]
                     select_clause.append(' c["%s"] ?? null,' % attribute)
@@ -792,7 +808,13 @@ class CosmosClientDatabase:
         return self.container_id
 
     def insert_doc(self, doc):
-        self.client.CreateItem(self.container_id, doc)
+        try:
+            return self.client.CreateItem(self.container_id, doc)
+        except HTTPFailure:
+            print('something went wrong inserting document.')
+
+    def get_doc_link(self, doc):
+        pass
 
     @staticmethod
     def generate_query(sql, args):
@@ -837,12 +859,17 @@ class CosmosDBCursor:
 
         if cursor.sql.startswith('I'):
             cursor.insert(sql, arguments)
+        elif cursor.sql.startswith('U'):
+            cursor.update(sql, arguments)
 
     def insert(cursor, sql, arguments):
         for i, p in enumerate(arguments, start=1):
             sql = sql.replace('@p{}'.format(i), str(p))
 
-        cursor.client.insert_doc(json.loads(sql.split('I ')[1]))
+        return cursor.client.insert_doc(json.loads(sql.split('I ')[1]))
+
+    def update(cursor, sql, arguments):
+        pass
 
     def fetchone(cursor):
         result = cursor.client.get_items(cursor.sql, cursor.arguments)
@@ -854,22 +881,7 @@ class CosmosDBCursor:
 
     def fetchall(cursor):
         result = cursor.client.get_items(cursor.sql, cursor.arguments)
-        list = []
-
-        for item in result:
-            keys = item.keys()
-            l = []
-
-            for i, k in enumerate(keys):
-                if not k.startswith('_'):
-                    if k not in cursor.description:
-                        cursor.description.append(k)
-
-                    l.append(item[k])
-
-            list.append(tuple(l))
-
-        return list
+        return [tuple(item.values()) for item in result]
 
 
 class CosmosDBConnection:

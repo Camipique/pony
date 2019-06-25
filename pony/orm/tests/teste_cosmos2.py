@@ -17,6 +17,7 @@ db = Database(provider='cosmosdb',
 class Student(db.Entity):
     student_id = PrimaryKey(int)
     name = Required(unicode)
+    _self = Optional(str)
     scholarship = Optional(int)
     gpa = Optional(Decimal, 3, 1)
     group = Required('Group')
@@ -26,6 +27,7 @@ class Student(db.Entity):
 
 class Group(db.Entity):
     number = PrimaryKey(int)
+    _self = Optional(str)
     name = Required(unicode)
     students = Set(Student)
     extra = Optional(Json)

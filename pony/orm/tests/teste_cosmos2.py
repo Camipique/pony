@@ -69,15 +69,19 @@ class TestQuery(unittest.TestCase):
         self.assertEqual(len(result), 3)
 
     def test_update(self):
-        pass
-        # with db_session:
-        #     result = Student[1]
-        #     result.name = 'update'
-        #     commit()
-        #
-        # with db_session:
-        #     result = Student[1]
-        #     self.assertEqual(result.name, 'update')
+        with db_session:
+            result = Student[1]
+            result.name = 'update'
+            commit()
+
+        with db_session:
+            result = Student[1]
+            self.assertEqual(result.name, 'update')
+
+        with db_session:
+            result = Student[1]
+            result.name = 'S1'
+            commit()
 
     def test_simple_condition(self):
         with db_session:

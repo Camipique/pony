@@ -78,11 +78,21 @@ class CosmosDBBuilder(SQLBuilder):
         sections.append(['ALL', '*'])
         sections.append(['FROM',[None, None, table_name]])
         sections.append(where)
-        updated = join(', ', [ ('c[' + builder.quote_name(name) + ']', '=', builder(param)) for name, param in pairs])
-        updated = [' UPDATED '] + updated
-        up = ['U '] + builder.SELECT(*sections) + updated
 
-        return up
+        updated = []
+        updated.append('{')
+        for name, param in pairs:
+            if param[2].py_type in (str, datetime):
+                updated.extend(['"%s":"' % name, builder(param), '"', ','])
+            else:
+                updated.extend(['"%s":' % name, builder(param), ','])
+
+        updated[-1] = '}'
+        updated = [' UPDATED '] + updated
+
+        query_update = ['UPDATED '] + builder.SELECT(*sections) + updated
+
+        return query_update
 
     def SELECT(builder, *sections):
 
@@ -155,7 +165,10 @@ class CosmosDBBuilder(SQLBuilder):
 
                             if value_type == 'PARAM':
                                 converter = fact2[2]
-                                where_clause.append(Param(builder.paramstyle, value, converter))
+                                if converter.py_type in (str, datetime):
+                                    where_clause.extend(['"', Param(builder.paramstyle, value, converter), '"'])
+                                else:
+                                    where_clause.append(Param(builder.paramstyle, value, converter))
                             elif value_type == 'VALUE':
                                 if isinstance(value, (str, datetime)):
                                     where_clause.append('"%s"' % value)
@@ -809,12 +822,15 @@ class CosmosClientDatabase:
 
     def insert_doc(self, doc):
         try:
-            return self.client.CreateItem(self.container_id, doc)
+            self.client.CreateItem(self.container_id, doc)
         except HTTPFailure:
             print('something went wrong inserting document.')
 
-    def get_doc_link(self, doc):
-        pass
+    def update_doc(self, doc_link, doc):
+        try:
+            self.client.ReplaceItem(doc_link, doc)
+        except HTTPFailure:
+            print('something went wrong updating document.')
 
     @staticmethod
     def generate_query(sql, args):
@@ -848,6 +864,7 @@ class CosmosDBCursor:
         cursor.client = client
         cursor.sql = None
         cursor.arguments = None
+        cursor.rowcount = 0
         cursor.description = []
         cursor.query_results = []
 
@@ -866,10 +883,25 @@ class CosmosDBCursor:
         for i, p in enumerate(arguments, start=1):
             sql = sql.replace('@p{}'.format(i), str(p))
 
-        return cursor.client.insert_doc(json.loads(sql.split('I ')[1]))
+        cursor.client.insert_doc(json.loads(sql.split('I ')[1]))
 
     def update(cursor, sql, arguments):
-        pass
+        for i, p in enumerate(arguments, start=1):
+            sql = sql.replace('@p{}'.format(i), str(p))
+
+        split = sql.split('UPDATED ')
+        query = split[1]
+        update_info = json.loads(split[2])
+        query_result = cursor.client.get_items(query, None)
+        doc = iter(query_result).next()
+
+        if doc is not None:
+            doc_link = doc['_self']
+            for key in update_info.keys():
+                doc[key] = update_info[key]
+
+            cursor.client.update_doc(doc_link, doc)
+            cursor.rowcount = cursor.rowcount + 1
 
     def fetchone(cursor):
         result = cursor.client.get_items(cursor.sql, cursor.arguments)

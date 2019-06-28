@@ -52,21 +52,28 @@ class TestQuery(unittest.TestCase):
         rollback()
         db_session.__exit__()
 
+    def test_delete(self):
+        with db_session:
+            result = Group[2]
+            result.delete()
+            commit()
+
     def test_raw_sql(self):
-        result = db.select('SELECT * FROM c WHERE c["doc_type"]="Student"')
-        self.assertEqual(len(result), 3)
+        with db_session:
+            result = db.select('SELECT * FROM c WHERE c["doc_type"]="Student"')
+            self.assertEqual(len(result), 3)
 
-        result = db.select('SELECT c["name"], c["gpa"] FROM c WHERE c["doc_type"]="Student"')
-        self.assertEqual(len(result), 3)
+            result = db.select('SELECT c["name"], c["gpa"] FROM c WHERE c["doc_type"]="Student"')
+            self.assertEqual(len(result), 3)
 
-        result = db.select('SELECT c["name"] ?? null, c["gpa"] ?? null FROM c WHERE c["doc_type"]="Student"')
-        self.assertEqual(len(result), 3)
+            result = db.select('SELECT c["name"] ?? null, c["gpa"] ?? null FROM c WHERE c["doc_type"]="Student"')
+            self.assertEqual(len(result), 3)
 
-        result = db.select('SELECT c["name"], c["dob"] FROM c WHERE c["doc_type"]="Student"')
-        self.assertEqual(len(result), 3)
+            result = db.select('SELECT c["name"], c["dob"] FROM c WHERE c["doc_type"]="Student"')
+            self.assertEqual(len(result), 3)
 
-        result = db.select('SELECT c["name"] ?? null, c["dob"] ?? null FROM c WHERE c["doc_type"]="Student"') # None for optional fields
-        self.assertEqual(len(result), 3)
+            result = db.select('SELECT c["name"] ?? null, c["dob"] ?? null FROM c WHERE c["doc_type"]="Student"') # None for optional fields
+            self.assertEqual(len(result), 3)
 
     def test_update(self):
         with db_session:

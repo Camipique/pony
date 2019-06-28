@@ -71,6 +71,17 @@ class CosmosDBBuilder(SQLBuilder):
         assert not builder.indent
         return builder.SELECT(*sections)
 
+    def DELETE(builder, alias, from_ast, where=None):  # see if ALIAS
+
+        sections = []
+        sections.append(['ALL', '*'])
+        sections.append(from_ast)
+        sections.append(where)
+
+        delete = []
+
+        delete.extend(['DELETE ', builder.SELECT(*sections)])
+        return delete
 
     def UPDATE(builder, table_name, pairs, where=None):
 
@@ -132,7 +143,7 @@ class CosmosDBBuilder(SQLBuilder):
                     fact2 = section[index][2]
                     if (fact1[1] != 0) or (fact2[1] != 1):  # because of the 1 = 0 ping to the database
 
-                        cond = ' c["%s"]'
+                        cond = 'c["%s"]'
 
                         if fact1[0] == 'JSON_VALUE':
                             attribute = fact1[1][2]
@@ -193,9 +204,18 @@ class CosmosDBBuilder(SQLBuilder):
         return operator_dict.get(operator, None)
 
     def INSERT(builder, table_name, columns, values, returning=None):
-        insert = ['I {"doc_type":"%s"' % table_name]
+
+        sections = []
+        sections.append(['ALL', '*'])
+        sections.append(['FROM', [None, None, table_name]])
+        where = ['WHERE']
+
+        insert = ['INSERT {"doc_type":"%s"' % table_name]
 
         for i, att in enumerate(columns):
+            if att != '_self':
+                to_add_where = ['EQ', ['COLUMN', 's', att], values[i]]
+                where.append(to_add_where)
             insert.append(', "%s":' % att)
             param_key = values[i][1]
             converter = values[i][2]
@@ -205,6 +225,11 @@ class CosmosDBBuilder(SQLBuilder):
                 insert.extend(['"', Param(builder.paramstyle, param_key, converter), '"'])
 
         insert.append('}')
+
+        sections.append(where)
+        query = builder.SELECT(*sections)
+
+        insert.extend([' INSERT ', query])
 
         return insert
 
@@ -820,15 +845,28 @@ class CosmosClientDatabase:
     def get_container_id(self):
         return self.container_id
 
-    def insert_doc(self, doc):
+    def insert_doc(self, doc, check):
         try:
-            self.client.CreateItem(self.container_id, doc)
+            result = self.get_items(check, None)
+            it = iter(result)
+            first = next(it, None)
+
+            if first is None:
+                self.client.CreateItem(self.container_id, json.loads(doc))
+            else:
+                pass
         except HTTPFailure:
             print('something went wrong inserting document.')
 
     def update_doc(self, doc_link, doc):
         try:
             self.client.ReplaceItem(doc_link, doc)
+        except HTTPFailure:
+            print('something went wrong updating document.')
+
+    def delete_doc(self, doc_link):
+        try:
+            self.client.DeleteItem(doc_link)
         except HTTPFailure:
             print('something went wrong updating document.')
 
@@ -873,21 +911,28 @@ class CosmosDBCursor:
         cursor.arguments = arguments
 
         print(sql)
+        print(arguments)
 
-        if cursor.sql.startswith('I'):
+        if cursor.sql.startswith('INSERT'):
             cursor.insert(sql, arguments)
-        elif cursor.sql.startswith('U'):
+        elif cursor.sql.startswith('UPDATE'):
             cursor.update(sql, arguments)
+        elif cursor.sql.startswith('DELETE'):
+            cursor.delete(sql, arguments)
 
     def insert(cursor, sql, arguments):
         for i, p in enumerate(arguments, start=1):
-            sql = sql.replace('@p{}'.format(i), str(p))
+            sql = sql.replace('@p{}'.format(i), str(p), 1)
 
-        cursor.client.insert_doc(json.loads(sql.split('I ')[1]))
+        split = sql.split('INSERT ')
+        doc = split[1]
+        check = split[2]
+
+        cursor.client.insert_doc(doc, check)
 
     def update(cursor, sql, arguments):
         for i, p in enumerate(arguments, start=1):
-            sql = sql.replace('@p{}'.format(i), str(p))
+            sql = sql.replace('@p{}'.format(i), str(p), 1)
 
         split = sql.split('UPDATED ')
         query = split[1]
@@ -901,6 +946,20 @@ class CosmosDBCursor:
                 doc[key] = update_info[key]
 
             cursor.client.update_doc(doc_link, doc)
+            cursor.rowcount = cursor.rowcount + 1
+
+    def delete(cursor, sql, arguments):
+        for i, p in enumerate(arguments, start=1):
+            sql = sql.replace('@p{}'.format(i), str(p), 1)
+
+        split = sql.split('DELETE ')
+        query = split[1]
+        query_result = cursor.client.get_items(query, None)
+        doc = iter(query_result).next()
+
+        if doc is not None:
+            doc_link = doc['_self']
+            cursor.client.delete_doc(doc_link)
             cursor.rowcount = cursor.rowcount + 1
 
     def fetchone(cursor):

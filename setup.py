@@ -10,8 +10,9 @@ def test_suite():
     test_suite = test_loader.discover('pony.orm.tests', pattern='test_*.py')
     return test_suite
 
-name = "pony"
-version = __import__('pony').__version__
+
+name = "eapy-pony"
+version = "1.0.1"
 description = "Pony Object-Relational Mapper"
 long_description = """
 About
@@ -101,8 +102,6 @@ package_data = {
     'pony.orm.tests': ['queries.txt']
 }
 
-download_url = "http://pypi.python.org/pypi/pony/"
-
 if __name__ == "__main__":
     pv = sys.version_info[:2]
     if pv not in ((2, 7), (3, 3), (3, 4), (3, 5), (3, 6), (3, 7)):
@@ -123,6 +122,5 @@ if __name__ == "__main__":
         license=licence,
         packages=packages,
         package_data=package_data,
-        download_url=download_url,
         test_suite='setup.test_suite'
     )

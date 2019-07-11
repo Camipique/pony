@@ -804,13 +804,14 @@ def py_make_array(*items):
 class CosmosClientDatabase:
     def __init__(self, endpoint, primary_key, database_name, container_name):
 
-        self.client = cosmos_client.CosmosClient(
-            url_connection=endpoint,
-            auth={'masterKey': primary_key}
-        )
+        if endpoint is not None:
+            self.client = cosmos_client.CosmosClient(
+                url_connection=endpoint,
+                auth={'masterKey': primary_key}
+            )
 
-        self.database_id = self.create_db_if_not_exists(database_name)
-        self.container_id = self.create_container_if_not_exists(container_name)
+            self.database_id = self.create_db_if_not_exists(database_name)
+            self.container_id = self.create_container_if_not_exists(container_name)
 
     def create_db_if_not_exists(self, db_name):
         db_link = 'dbs/'+db_name
@@ -1008,6 +1009,13 @@ class CosmosDBPool(Pool):
         pool.container_name = container_name
         pool.kwargs = kwargs
         pool.con = None
+
+    def open(pool, endpoint, primary_key, database_name, container_name):
+        pool.endpoint = endpoint
+        pool.primary_key = primary_key
+        pool.database_name = database_name
+        pool.container_name = container_name
+        pool.connect()
 
     def connect(pool):
         if pool.con is None:

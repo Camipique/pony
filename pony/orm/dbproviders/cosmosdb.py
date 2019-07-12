@@ -117,7 +117,7 @@ class CosmosDBBuilder(SQLBuilder):
             if clause == 'FROM':
                 doc_type = section[1][2]
                 where_clause.append(' c["doc_type"]="%s"' % doc_type)
-            elif clause == 'ALL':  # include this attributes in the SELECT clause
+            elif clause in ('ALL', 'DISTINCT'):  # include this attributes in the SELECT clause
                 if section[1] == '*':
                     select_clause.append(' * ')
                     continue

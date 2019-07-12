@@ -12,7 +12,7 @@ def test_suite():
 
 
 name = "eapy-pony"
-version = "1.0.2"
+version = "1.0.3"
 description = "Pony Object-Relational Mapper"
 long_description = """
 About

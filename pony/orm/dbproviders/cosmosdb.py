@@ -24,7 +24,7 @@ from pony.utils import datetime2timestamp, timestamp2datetime, absolutize_path, 
 
 from azure.cosmos import cosmos_client
 from azure.cosmos.errors import HTTPFailure
-
+from json import JSONDecodeError
 
 class SqliteExtensionUnavailable(Exception):
     pass
@@ -429,9 +429,16 @@ class CosmosDBDatetimeConverter(dbapiprovider.DatetimeConverter):
     def py2sql(converter, val):
         return datetime2timestamp(val)
 
+class CosmosDBStrConverter(dbapiprovider.StrConverter):
+    def val2dbval(converter, val, obj=None):
+        return val.replace('\\\\', '\\')
+
 
 class CosmosDBJsonConverter(dbapiprovider.JsonConverter):
     json_kwargs = {'separators': (',', ':'), 'sort_keys': True, 'ensure_ascii': False}
+
+    def val2dbval(converter, val, obj=None):
+        return json.dumps(val)
 
     def dbval2val(converter, dbval, obj=None):
         if isinstance(dbval, (int, bool, float, type(None), dict)):
@@ -506,7 +513,7 @@ class CosmosDBProvider(DBAPIProvider):
     converter_classes = [
         (NoneType, dbapiprovider.NoneConverter),
         (bool, dbapiprovider.BoolConverter),
-        (basestring, dbapiprovider.StrConverter),
+        (basestring, CosmosDBStrConverter),
         (int_types, CosmosDBIntConverter),
         (float, dbapiprovider.RealConverter),
         (Decimal, CosmosDBDecimalConverter),
@@ -803,7 +810,6 @@ def py_make_array(*items):
 
 class CosmosClientDatabase:
     def __init__(self, endpoint, primary_key, database_name, container_name):
-
         if endpoint is not None:
             self.client = cosmos_client.CosmosClient(
                 url_connection=endpoint,
@@ -846,18 +852,27 @@ class CosmosClientDatabase:
     def get_container_id(self):
         return self.container_id
 
-    def insert_doc(self, doc, check):
-        try:
-            result = self.get_items(check, None)
-            it = iter(result)
-            first = next(it, None)
-
-            if first is None:
-                self.client.CreateItem(self.container_id, json.loads(doc))
+    def permissive_json_loads(self, text):
+        while True:
+            try:
+                data = json.loads(text)
+            except JSONDecodeError as exc:
+                if exc.msg == 'Invalid \\escape':
+                    text = text[:exc.pos] + '\\' + text[exc.pos:]
+                else:
+                    raise
             else:
-                pass
-        except HTTPFailure:
-            print('something went wrong inserting document.')
+                return data
+
+    def insert_doc(self, doc, check):
+        result = self.get_items(check, None)
+        it = iter(result)
+        first = next(it, None)
+
+        if first is None:
+            self.client.CreateItem(self.container_id, self.permissive_json_loads(doc))
+        else:
+            pass
 
     def update_doc(self, doc_link, doc):
         try:
@@ -910,7 +925,6 @@ class CosmosDBCursor:
     def execute(cursor, sql, arguments):
         cursor.sql = sql
         cursor.arguments = arguments
-
         print(sql)
         print(arguments)
 
@@ -1035,3 +1049,4 @@ class CosmosDBPool(Pool):
 
     def drop(pool, con):
         pass
+    
